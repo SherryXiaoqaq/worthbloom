@@ -25,11 +25,15 @@ export default function FriendReviewPage() {
   const [busy,setBusy] = useState(false);
 
   useEffect(() => {
-    if (!token) { setError('这条链接不完整'); setLoading(false); return; }
+    if (!token) {
+      Promise.resolve().then(() => { setError('这条链接不完整'); setLoading(false); });
+      return;
+    }
     fetch(`/api/review?token=${encodeURIComponent(token)}`, { cache:'no-store' })
       .then(async response => {
-        const data = await response.json();
+        const data = await response.json() as { error?:string; request?:ReviewWish };
         if (!response.ok) throw new Error(data.error ?? '链接无法打开');
+        if (!data.request) throw new Error('邀请卡内容不完整');
         setWish(data.request);
       })
       .catch(reason => setError(reason instanceof Error ? reason.message : '加载失败'))
@@ -44,7 +48,7 @@ export default function FriendReviewPage() {
     setError('');
     try {
       const response = await fetch('/api/review', { method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ token, reviewerName:name, choice, comment }) });
-      const data = await response.json();
+      const data = await response.json() as { error?:string };
       if (!response.ok) throw new Error(data.error ?? '提交失败');
       setDone(true);
     } catch (reason) {

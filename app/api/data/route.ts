@@ -1,4 +1,7 @@
 import { getDb } from '@/lib/server/db';
+import { CloudBaseAuthError, requireCloudBaseUser } from '@/lib/server/cloudbase-auth';
+import { isCloudBaseServerConfigured } from '@/lib/server/cloudbase';
+import { CloudBaseStoreError, handleCloudBaseDataAction, loadCloudBaseData } from '@/lib/server/cloudbase-store';
 import { getLocalData, handleLocalDataAction, isLocalPreview, LocalStoreError } from '@/lib/server/local-store';
 import { isOwnerRequest, ownerOnly } from '@/lib/server/owner';
 import type { Asset, ReviewChoice } from '@/lib/types';
@@ -31,6 +34,15 @@ async function loadData() {
 }
 
 export async function GET(request: Request) {
+  if (isCloudBaseServerConfigured()) {
+    try {
+      const user = await requireCloudBaseUser(request);
+      return Response.json(await loadCloudBaseData(user.id));
+    } catch (error) {
+      const status = error instanceof CloudBaseAuthError || error instanceof CloudBaseStoreError ? error.status : 500;
+      return Response.json({ error: error instanceof Error ? error.message : 'CloudBase 数据库不可用' }, { status });
+    }
+  }
   if (!isOwnerRequest(request.headers)) return ownerOnly();
   if (isLocalPreview(request)) return Response.json(getLocalData());
   try { return Response.json(await loadData()); }
@@ -38,6 +50,17 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  if (isCloudBaseServerConfigured()) {
+    try {
+      const user = await requireCloudBaseUser(request);
+      const body = await request.json() as Record<string, unknown>;
+      const output = await handleCloudBaseDataAction(user.id, body);
+      return Response.json(output, { status: body.action === 'create_request' || body.action === 'create_invite' || body.action === 'add_asset' ? 201 : 200 });
+    } catch (error) {
+      const status = error instanceof CloudBaseAuthError || error instanceof CloudBaseStoreError ? error.status : 500;
+      return Response.json({ error: error instanceof Error ? error.message : 'CloudBase 操作失败' }, { status });
+    }
+  }
   if (!isOwnerRequest(request.headers)) return ownerOnly();
   try {
     const body = await request.json() as Record<string, unknown>;

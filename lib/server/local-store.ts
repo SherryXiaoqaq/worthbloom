@@ -122,7 +122,7 @@ export function getLocalReview(tokenValue:string) {
   if(!invite)throw new LocalStoreError('链接不存在或已撤销',404);
   const request=data.requests.find(item=>item.id===invite.request_id);
   if(invite.revoked||invite.used_at||!request||request.status!=='REVIEWING')throw new LocalStoreError('这张邀请卡已经完成使命了',410);
-  const {review_token:_token,review_count:_count,created_at:_created,...wish}=request; return {request:wish};
+  const wish:Partial<PurchaseRequest>={...request}; delete wish.review_token; delete wish.review_count; delete wish.created_at; return {request:wish};
 }
 
 export function submitLocalReview(body:{token?:string;reviewerName?:string;choice?:ReviewChoice;comment?:string}) {
