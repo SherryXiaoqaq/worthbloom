@@ -1,10 +1,17 @@
 import { headers } from 'next/headers';
 import DashboardClient from './dashboard-client';
+import CloudBaseAuthGate from './cloudbase-auth-gate';
+import { isCloudBaseServerConfigured } from '@/lib/server/cloudbase';
 import { isOwnerRequest } from '@/lib/server/owner';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Home() {
+  const envId = process.env.CLOUDBASE_ENV_ID || process.env.NEXT_PUBLIC_CLOUDBASE_ENV_ID || '';
+  const publishableKey = process.env.CLOUDBASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_CLOUDBASE_PUBLISHABLE_KEY || '';
+  const cloudBaseConfigured = isCloudBaseServerConfigured() && Boolean(publishableKey);
+  if (cloudBaseConfigured) return <CloudBaseAuthGate config={{ envId, publishableKey, region: process.env.CLOUDBASE_REGION || process.env.NEXT_PUBLIC_CLOUDBASE_REGION || 'ap-shanghai' }}><DashboardClient/></CloudBaseAuthGate>;
+
   const requestHeaders = await headers();
   if (isOwnerRequest(requestHeaders)) return <DashboardClient/>;
 

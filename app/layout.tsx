@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 
-const siteUrl = 'https://worthbloom-haohaohua.hybrid-j9y56-1505.chatgpt.site';
+const siteUrl = process.env.SITE_URL || 'https://worthbloom-haohaohua.hybrid-j9y56-1505.chatgpt.site';
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),

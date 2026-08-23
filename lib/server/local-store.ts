@@ -2,6 +2,7 @@ import type { AppData, Asset, PurchaseRequest, ReviewChoice, ReviewInvite } from
 
 declare global {
   var __worthBloomLocalStore: AppData | undefined;
+  var __worthBloomDeviceEvents: Set<string> | undefined;
 }
 
 export class LocalStoreError extends Error {
@@ -57,6 +58,7 @@ function requestType(category:string): Asset['type'] {
 export function handleLocalDataAction(body:Record<string,unknown>) {
   if (body.action === 'reset_preview') {
     globalThis.__worthBloomLocalStore = seed();
+    globalThis.__worthBloomDeviceEvents = new Set<string>();
     return { ok:true };
   }
   const data = store();
@@ -88,7 +90,7 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     const type=request?requestType(request.category):'ITEM';
     const assetId=request?`asset-${request.id}`:`asset-${goal.id}`;
     let asset=data.assets.find(item=>item.id===assetId);
-    if(!asset){asset={id:assetId,name:goal.name,type,purchase_price:goal.target,total_units:request?.total_units??null,used_units:0,current_balance:type==='STORED_VALUE'?goal.target:null,expiry_date:request?.expiry_date??null,usage_count:0,last_used_at:null};data.assets.unshift(asset)}
+    if(!asset){asset={id:assetId,name:goal.name,type,purchase_price:goal.target,total_units:request?.total_units??null,used_units:0,current_balance:type==='STORED_VALUE'?goal.target:null,expiry_date:request?.expiry_date??null,usage_count:0,last_used_at:null,bloom_until:new Date(Date.now()+20_000).toISOString()};data.assets.unshift(asset)}
     if(request)request.status='PURCHASED';
     data.savingGoals=data.savingGoals.filter(item=>item.id!==goal.id); globalThis.__worthBloomLocalStore=data;
     return {goal,completed:true,asset};
@@ -104,17 +106,30 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
   }
   if (body.action === 'use_asset') {
     const asset=data.assets.find(item=>item.id===String(body.assetId??'')); if(!asset)throw new LocalStoreError('没有找到这个物资',404);
-    if(asset.total_units!=null)asset.used_units=Math.min(asset.total_units,asset.used_units+1); asset.usage_count+=1; asset.last_used_at=new Date().toISOString().slice(0,10); return {ok:true};
+    if(asset.total_units!=null)asset.used_units=Math.min(asset.total_units,asset.used_units+1); asset.usage_count+=1; asset.last_used_at=new Date().toISOString().slice(0,10); asset.recovering_until=new Date(Date.now()+10_000).toISOString(); return {ok:true};
   }
   if (body.action === 'decide') {
     const decision=String(body.decision) as ReviewChoice; if(!['BUY_NOW','SAVE_FIRST','WAIT'].includes(decision))throw new LocalStoreError('无效决定');
     const request=data.requests.find(item=>item.id===String(body.requestId??'')); if(!request||request.status!=='REVIEWING')throw new LocalStoreError('这个心愿已经完成决定',409);
     request.status=decision==='BUY_NOW'?'PURCHASED':decision==='SAVE_FIRST'?'SAVING':'ARCHIVED'; data.invites.filter(item=>item.request_id===request.id&&!item.used_at).forEach(item=>item.revoked=1);
     if(decision==='SAVE_FIRST'&&!data.savingGoals.some(item=>item.request_id===request.id))data.savingGoals.unshift({id:`saving-${request.id}`,request_id:request.id,name:request.name,target:request.price,current:0,weekly_plan:null,created_at:now()});
-    if(decision==='BUY_NOW'&&!data.assets.some(item=>item.id===`asset-${request.id}`))data.assets.unshift({id:`asset-${request.id}`,name:request.name,type:requestType(request.category),purchase_price:request.price,total_units:request.total_units,used_units:0,current_balance:requestType(request.category)==='STORED_VALUE'?request.price:null,expiry_date:request.expiry_date,usage_count:0,last_used_at:null});
+    if(decision==='BUY_NOW'&&!data.assets.some(item=>item.id===`asset-${request.id}`))data.assets.unshift({id:`asset-${request.id}`,name:request.name,type:requestType(request.category),purchase_price:request.price,total_units:request.total_units,used_units:0,current_balance:requestType(request.category)==='STORED_VALUE'?request.price:null,expiry_date:request.expiry_date,usage_count:0,last_used_at:null,bloom_until:new Date(Date.now()+20_000).toISOString()});
     return {ok:true,target:decision==='BUY_NOW'?'assets':decision==='SAVE_FIRST'?'saving':'wishes'};
   }
   throw new LocalStoreError('不支持的操作');
+}
+
+export function recordLocalDeviceUsage(assetId:string, clientEventId:string) {
+  globalThis.__worthBloomDeviceEvents ??= new Set<string>();
+  if (globalThis.__worthBloomDeviceEvents.has(clientEventId)) return {ok:true,duplicate:true};
+  const asset=store().assets.find(item=>item.id===assetId);
+  if(!asset)throw new LocalStoreError('没有找到这个物资',404);
+  if(asset.total_units!=null)asset.used_units=Math.min(asset.total_units,asset.used_units+1);
+  asset.usage_count+=1;
+  asset.last_used_at=new Date().toISOString().slice(0,10);
+  asset.recovering_until=new Date(Date.now()+10_000).toISOString();
+  globalThis.__worthBloomDeviceEvents.add(clientEventId);
+  return {ok:true,duplicate:false};
 }
 
 export function getLocalReview(tokenValue:string) {
@@ -122,7 +137,7 @@ export function getLocalReview(tokenValue:string) {
   if(!invite)throw new LocalStoreError('链接不存在或已撤销',404);
   const request=data.requests.find(item=>item.id===invite.request_id);
   if(invite.revoked||invite.used_at||!request||request.status!=='REVIEWING')throw new LocalStoreError('这张邀请卡已经完成使命了',410);
-  const {review_token:_token,review_count:_count,created_at:_created,...wish}=request; return {request:wish};
+  const wish:Partial<PurchaseRequest>={...request}; delete wish.review_token; delete wish.review_count; delete wish.created_at; return {request:wish};
 }
 
 export function submitLocalReview(body:{token?:string;reviewerName?:string;choice?:ReviewChoice;comment?:string}) {

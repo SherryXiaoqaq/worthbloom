@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { cloudBaseFetch, isCloudBaseClientConfigured } from '@/lib/cloudbase/client';
 import type { AppData, Asset, PurchaseRequest, ReviewChoice, ReviewInvite, SavingGoal } from '@/lib/types';
 
 type Tab = 'home' | 'wishes' | 'saving' | 'assets';
@@ -38,6 +39,8 @@ const fallbackData: AppData = {
   ],
 };
 
+const emptyData: AppData = { requests:[], reviews:[], invites:[], savingGoals:[], assets:[] };
+
 function Flower({ progress=78, small=false }: { progress?:number; small?:boolean }) {
   return <div className={`wb-flower ${small?'is-small':''}`} aria-label={`电子花成长 ${progress}%`}><i className="wb-stem"/><i className="wb-leaf left"/><i className="wb-leaf right"/><div className="wb-bloom"><i/><i/><i/><i/><i/><b/></div></div>;
 }
@@ -70,7 +73,7 @@ function CreateRequest({ onBack,onCreated }: { onBack:()=>void; onCreated:(reque
     event.preventDefault(); setBusy(true); setError('');
     const payload = { ...form, price:Number(form.price), total_units:form.total_units?Number(form.total_units):null };
     try {
-      const response = await fetch('/api/data',{ method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'create_request',payload}) });
+      const response = await cloudBaseFetch('/api/data',{ method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'create_request',payload}) });
       const output = await readApi<{request:PurchaseRequest;invites:ReviewInvite[]}>(response);
       onCreated(output.request, output.invites);
     } catch (reason) { setError(reason instanceof Error?reason.message:'创建失败'); }
@@ -101,7 +104,7 @@ function RequestDetail({ request,data,onBack,onRefresh,onDecision }: { request:P
   const inviteUrl = (invite:ReviewInvite) => typeof window==='undefined'?'':`${window.location.origin}/review/${requestSlug(request)}/${invite.token}`;
   async function copy(invite:ReviewInvite) { await navigator.clipboard.writeText(inviteUrl(invite)); setCopied(invite.id); setTimeout(()=>setCopied(''),1600); }
   async function mutate(action:string, payload:Record<string,unknown>) {
-    const response = await fetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...payload})});
+    const response = await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...payload})});
     return readApi<Record<string,unknown>>(response);
   }
   async function addInvite(){setBusy('invite');setError('');setNotice('');try{await mutate('create_invite',{requestId:request.id});await onRefresh();setNotice('新邀请卡已生成。复制这一张发给下一位朋友即可。')}catch(reason){setError(reason instanceof Error?reason.message:'生成失败')}finally{setBusy('')}}
@@ -117,9 +120,8 @@ function GoalCard({ goal,compact=false,onUpdated,onCompleted }: { goal:SavingGoa
   const [amount,setAmount] = useState('');
   const [current,setCurrent] = useState(goal.current);
   const [state,setState] = useState<'idle'|'saving'|'saved'|'completed'|'error'>('idle');
-  useEffect(()=>setCurrent(goal.current),[goal.current]);
   const progress = Math.min(100,Math.round(current/goal.target*100));
-  async function add(value?:number){const amountValue=value??Number(amount);if(!amountValue||amountValue<=0){setState('error');return}setState('saving');try{const response=await fetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'add_saving',goalId:goal.id,amount:amountValue})});const output=await readApi<{goal:SavingGoal;completed:boolean}>(response);setCurrent(output.goal.current);setAmount('');if(output.completed){setState('completed');setTimeout(()=>onCompleted?.(),900);return}setState('saved');onUpdated?.(output.goal);setTimeout(()=>setState('idle'),1500)}catch{setState('error')}}
+  async function add(value?:number){const amountValue=value??Number(amount);if(!amountValue||amountValue<=0){setState('error');return}setState('saving');try{const response=await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'add_saving',goalId:goal.id,amount:amountValue})});const output=await readApi<{goal:SavingGoal;completed:boolean}>(response);setCurrent(output.goal.current);setAmount('');if(output.completed){setState('completed');setTimeout(()=>onCompleted?.(),900);return}setState('saved');onUpdated?.(output.goal);setTimeout(()=>setState('idle'),1500)}catch{setState('error')}}
   return <article className={`goal-card ${compact?'compact':''}`}><div className="goal-flower"><Flower progress={progress} small/><b>{progress}%</b></div><div className="goal-copy"><span>{state==='completed'?'愿望已盛开':'养愿中'}</span><h3>{goal.name}</h3><div className="goal-progress"><i style={{width:`${progress}%`}}/></div><div className="goal-money"><b>¥{current.toLocaleString()}</b><span>/ ¥{goal.target.toLocaleString()}</span></div></div>{!compact&&<div className="saving-actions"><p>今天想让它靠近多少？</p><div className="quick-saving">{[50,100,200].map(value=><button disabled={state==='saving'||state==='completed'} key={value} onClick={()=>add(value)}>+ ¥{value}</button>)}</div><div className="custom-saving"><div><span>¥</span><input aria-label="自定义存钱金额" disabled={state==='completed'} min="1" type="number" value={amount} onChange={event=>setAmount(event.target.value)} placeholder="输入自定义金额"/></div><button disabled={state==='saving'||state==='completed'} onClick={()=>add()}>{state==='saving'?'存入中':'存入'}</button></div>{state==='saved'&&<small className="saving-feedback success">✓ 已存入，花又长大了一点</small>}{state==='completed'&&<small className="saving-feedback success">✓ 目标达成，正在放进“我的物资”</small>}{state==='error'&&<small className="saving-feedback error">请输入大于 0 的金额并重试</small>}</div>}</article>;
 }
 
@@ -128,7 +130,7 @@ function CreateAsset({ onBack,onCreated }: { onBack:()=>void; onCreated:()=>void
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState('');
   const update = (key:keyof typeof form,value:string) => setForm(previous=>({...previous,[key]:value}));
-  async function submit(event:FormEvent){event.preventDefault();setBusy(true);setError('');try{const payload={...form,purchase_price:Number(form.purchase_price),total_units:form.total_units?Number(form.total_units):null,used_units:form.used_units?Number(form.used_units):0,usage_count:form.usage_count?Number(form.usage_count):0,current_balance:form.current_balance?Number(form.current_balance):null};const response=await fetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'add_asset',payload})});await readApi(response);onCreated()}catch(reason){setError(reason instanceof Error?reason.message:'添加失败')}finally{setBusy(false)}}
+  async function submit(event:FormEvent){event.preventDefault();setBusy(true);setError('');try{const payload={...form,purchase_price:Number(form.purchase_price),total_units:form.total_units?Number(form.total_units):null,used_units:form.used_units?Number(form.used_units):0,usage_count:form.usage_count?Number(form.usage_count):0,current_balance:form.current_balance?Number(form.current_balance):null};const response=await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'add_asset',payload})});await readApi(response);onCreated()}catch(reason){setError(reason instanceof Error?reason.message:'添加失败')}finally{setBusy(false)}}
   return <><TopBar title="添加已有物资" onBack={onBack}/><form className="request-form" onSubmit={submit}><div className="form-intro"><span>ALREADY MINE</span><h1>把已经拥有的，<br/>重新带回生活。</h1><p>以前买过的课程、会员、储值或实物，都可以从这里开始记录。</p></div>
     <label><span>物资名称 *</span><input required value={form.name} onChange={event=>update('name',event.target.value)} placeholder="例如：去年买的瑜伽年卡"/></label><div className="field-pair"><label><span>类型 *</span><select value={form.type} onChange={event=>update('type',event.target.value)}>{Object.entries(typeCopy).map(([id,label])=><option value={id} key={id}>{label}</option>)}</select></label><label><span>当时购入金额 *</span><div className="money-input"><i>¥</i><input required min="0" step="0.01" type="number" value={form.purchase_price} onChange={event=>update('purchase_price',event.target.value)} placeholder="0"/></div></label></div>
     <div className="field-pair"><label><span>总次数 / 份数</span><input min="0" type="number" value={form.total_units} onChange={event=>update('total_units',event.target.value)} placeholder="不限次可留空"/></label><label><span>已经用掉</span><input min="0" type="number" value={form.used_units} onChange={event=>update('used_units',event.target.value)} placeholder="0"/></label></div>
@@ -154,19 +156,19 @@ function AssetsView({ assets,onUpdated,onAdd }: { assets:Asset[]; onUpdated:()=>
   const [confirmDelete,setConfirmDelete] = useState('');
   const [busy,setBusy] = useState('');
   const [error,setError] = useState('');
-  async function action(actionName:string, assetId:string){setBusy(assetId);setError('');try{const response=await fetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:actionName,assetId})});await readApi(response);onUpdated();setConfirmDelete('')}catch(reason){setError(reason instanceof Error?reason.message:'操作失败')}finally{setBusy('')}}
+  async function action(actionName:string, assetId:string){setBusy(assetId);setError('');try{const response=await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:actionName,assetId})});await readApi(response);onUpdated();setConfirmDelete('')}catch(reason){setError(reason instanceof Error?reason.message:'操作失败')}finally{setBusy('')}}
   return <><TopBar title="我的物资" action={<button className="round-add" onClick={onAdd}>＋</button>}/><section className="tab-intro"><span>MY VALUE</span><h1>买下不是结尾，<br/>用起来才是。</h1><p>以前买过的也能直接添加；不想继续记录时，随时停止追踪。</p></section>{error&&<p className="form-error list-error">{error}</p>}<section className="asset-list">{assets.map(asset=>{const remain=asset.total_units==null?null:Math.max(0,asset.total_units-asset.used_units);const costPerUse=asset.usage_count?Math.round(asset.purchase_price/asset.usage_count):null;return <article key={asset.id}><div className="asset-title"><AssetGlyph type={asset.type}/><div><span>{typeCopy[asset.type]}</span><h2>{asset.name}</h2></div></div><div className="asset-stats"><div><b>{remain==null?asset.usage_count:remain}</b><span>{remain==null?'累计使用':'剩余次数'}</span></div><div><b>{costPerUse?`¥${costPerUse}`:'—'}</b><span>单次价值</span></div><div><b>{asset.expiry_date?asset.expiry_date.slice(5).replace('-','.'):'长期'}</b><span>有效期</span></div></div><div className="asset-actions"><button disabled={busy===asset.id} onClick={()=>action('use_asset',asset.id)}>{busy===asset.id?'更新中…':'＋ 今天使用了'}</button><button className={`stop-track ${confirmDelete===asset.id?'confirming':''}`} disabled={busy===asset.id} onClick={()=>confirmDelete===asset.id?action('delete_asset',asset.id):setConfirmDelete(asset.id)}>{confirmDelete===asset.id?'确认移除':'停止追踪'}</button></div>{confirmDelete===asset.id&&<small className="delete-hint">再点一次确认移除；这不会影响其他物资。</small>}</article>})}{!assets.length&&<div className="empty-card">还没有物资。把以前买过但仍想好好使用的东西放进来吧。</div>}</section><button className="floating-create" onClick={onAdd}>＋ 添加已有物资</button></>;
 }
 
 const nav:{id:Tab;label:string;icon:string}[] = [{id:'home',label:'花园',icon:'⌂'},{id:'wishes',label:'心愿',icon:'◇'},{id:'saving',label:'养愿',icon:'◔'},{id:'assets',label:'物资',icon:'▤'}];
 
 export default function DashboardClient() {
-  const [data,setData] = useState<AppData>(fallbackData);
+  const [data,setData] = useState<AppData>(() => isCloudBaseClientConfigured() ? emptyData : fallbackData);
   const [tab,setTab] = useState<Tab>('home');
   const [screen,setScreen] = useState<Screen>('main');
   const [active,setActive] = useState<PurchaseRequest|null>(null);
-  async function refresh(){try{const response=await fetch('/api/data',{cache:'no-store'});setData(await readApi<AppData>(response))}catch{}}
-  useEffect(()=>{void refresh()},[]);
+  async function refresh(){try{const response=await cloudBaseFetch('/api/data',{cache:'no-store'});setData(await readApi<AppData>(response))}catch{}}
+  useEffect(()=>{let active=true;cloudBaseFetch('/api/data',{cache:'no-store'}).then(response=>readApi<AppData>(response)).then(output=>{if(active)setData(output)}).catch(()=>{});return()=>{active=false}},[]);
   function choose(nextTab:Tab){setTab(nextTab);setScreen('main');setActive(null);window.scrollTo({top:0,behavior:'smooth'})}
   function open(request:PurchaseRequest){setActive(request);setScreen('request');window.scrollTo(0,0)}
   function created(request:PurchaseRequest, invites:ReviewInvite[]){setData(previous=>({...previous,requests:[request,...previous.requests],invites:[...previous.invites,...invites]}));setActive(request);setScreen('request');window.scrollTo(0,0)}
