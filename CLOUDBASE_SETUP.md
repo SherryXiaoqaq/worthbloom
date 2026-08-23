@@ -56,7 +56,7 @@ pnpm.cmd dev
 
 这不是纯静态网页，因为朋友提交回信、保存进度和身份校验都需要 `/api`，所以应选“云托管/CloudBase Run”，不要只上传到静态网站托管。
 
-1. 先把当前代码推到 GitHub。
+1. 先把当前代码推到 GitHub。（已经推送）
 2. CloudBase 控制台进入“云托管”，创建服务，例如 `worthbloom-web`。
 3. 选择“代码仓库/GitHub 构建”，仓库选 `worthbloom`，分支选 `main`。
 4. 构建方式选 `Dockerfile`；容器端口填 `3000`。
@@ -68,6 +68,9 @@ pnpm.cmd dev
    CLOUDBASE_PUBLISHABLE_KEY=你的Publishable Key
    CLOUDBASE_APIKEY=你的服务端API Key
    SITE_URL=部署成功后的完整https网址
+   DEVICE_ID=flower_01
+   DEVICE_OWNER_ID=身份认证中主人账号的用户ID
+   DEVICE_SHARED_SECRET=至少32位的随机字符串
    ```
 
 6. 最小实例数测试期可设 `0` 省钱；如果第一次打开明显有冷启动，正式发布后改成 `1`。
@@ -90,3 +93,9 @@ pnpm.cmd dev
 - 登录正常但 API 返回 401：确认浏览器和服务端使用的是同一个环境 ID，并检查系统时间。
 - 国内首次访问慢：CloudBase Run 最小实例数设为 1，并选择离主要用户近的上海地域。
 - 自定义大陆域名无法上线：需要先完成 ICP 备案；测试阶段可以先用 CloudBase 提供的默认域名。
+
+## 7. 桌面花设备
+
+桌面花不使用主人的登录密码，而是通过独立的 `DEVICE_SHARED_SECRET` 调用 `/api/device/state` 和 `/api/device/action`。`DEVICE_OWNER_ID` 在“身份认证 → 用户列表”中复制，表示这盆花应读取哪位主人的数据。设备密钥不要写进网页前端，也不要提交到 GitHub。
+
+固件、采购、接线和烧录的逐步说明见 `hardware/README.md`。CloudBase Run 修改环境变量后需要重新部署服务，硬件才能读到新配置。

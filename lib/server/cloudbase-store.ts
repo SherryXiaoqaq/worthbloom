@@ -188,6 +188,7 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
       expiry_date: source?.expiry_date ? String(source.expiry_date) : null,
       usage_count: 0,
       last_used_at: null,
+      bloom_until: new Date(Date.now() + 20_000).toISOString(),
     };
     await saveDocument(collections.assets, assetId, { ...asset, request_id: requestId, owner_id: ownerId, created_at: now() });
     if (requestId) await db.collection(collections.requests).doc(requestId).update({ status: 'PURCHASED' });
@@ -239,7 +240,7 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     if (!document) throw new CloudBaseStoreError('没有找到这个物资', 404);
     const totalUnits = document.total_units == null ? null : Number(document.total_units);
     const usedUnits = totalUnits == null ? Number(document.used_units) : Math.min(totalUnits, Number(document.used_units) + 1);
-    await db.collection(collections.assets).doc(assetId).update({ used_units: usedUnits, usage_count: Number(document.usage_count) + 1, last_used_at: today() });
+    await db.collection(collections.assets).doc(assetId).update({ used_units: usedUnits, usage_count: Number(document.usage_count) + 1, last_used_at: today(), recovering_until: new Date(Date.now() + 10_000).toISOString() });
     const usageId = crypto.randomUUID();
     await saveDocument(collections.usage, usageId, { owner_id: ownerId, asset_id: assetId, usage_type: 'USED_TODAY', client_event_id: crypto.randomUUID(), created_at: now() });
     return { ok: true };
@@ -265,12 +266,37 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     if (decision === 'BUY_NOW') {
       const type = requestType(String(source.category));
       const assetId = `asset-${requestId}`;
-      await saveDocument(collections.assets, assetId, { owner_id: ownerId, request_id: requestId, name: String(source.name), type, purchase_price: Number(source.price), total_units: source.total_units ?? null, used_units: 0, current_balance: type === 'STORED_VALUE' ? Number(source.price) : null, expiry_date: source.expiry_date ?? null, usage_count: 0, last_used_at: null, created_at: now() });
+      await saveDocument(collections.assets, assetId, { owner_id: ownerId, request_id: requestId, name: String(source.name), type, purchase_price: Number(source.price), total_units: source.total_units ?? null, used_units: 0, current_balance: type === 'STORED_VALUE' ? Number(source.price) : null, expiry_date: source.expiry_date ?? null, usage_count: 0, last_used_at: null, bloom_until: new Date(Date.now() + 20_000).toISOString(), created_at: now() });
     }
     return { ok: true, target: decision === 'BUY_NOW' ? 'assets' : decision === 'SAVE_FIRST' ? 'saving' : 'wishes' };
   }
 
   throw new CloudBaseStoreError('不支持的操作');
+}
+
+export async function recordCloudBaseDeviceUsage(ownerId:string, assetId:string, clientEventId:string) {
+  const usageId = `device-${clientEventId}`;
+  const existingResult = await getCloudBaseDb().collection(collections.usage).doc(usageId).get();
+  if ((existingResult.data || []).length) return {ok:true,duplicate:true};
+
+  const asset = await ownedDocument(collections.assets, assetId, ownerId);
+  if (!asset) throw new CloudBaseStoreError('没有找到这个物资', 404);
+  const totalUnits = asset.total_units == null ? null : Number(asset.total_units);
+  const usedUnits = totalUnits == null ? Number(asset.used_units) : Math.min(totalUnits, Number(asset.used_units) + 1);
+  await getCloudBaseDb().collection(collections.assets).doc(assetId).update({
+    used_units: usedUnits,
+    usage_count: Number(asset.usage_count) + 1,
+    last_used_at: today(),
+    recovering_until: new Date(Date.now() + 10_000).toISOString(),
+  });
+  await saveDocument(collections.usage, usageId, {
+    owner_id: ownerId,
+    asset_id: assetId,
+    usage_type: 'USED_TODAY',
+    client_event_id: clientEventId,
+    created_at: now(),
+  });
+  return {ok:true,duplicate:false};
 }
 
 export async function getCloudBaseReview(token: string) {

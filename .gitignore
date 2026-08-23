@@ -21,6 +21,9 @@
 .DS_Store
 *.pem
 *.tsbuildinfo
+/hardware/firmware/.pio/
+/hardware/firmware/.vscode/
+/hardware/firmware/include/secrets.h
 
 # debug
 npm-debug.log*
