@@ -226,6 +226,15 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     return { ok: true, asset:{...cleanDocument(document),used_units:usage.used_units,usage_count:usage.usage_count,current_balance:usage.current_balance,last_used_at:today()} };
   }
 
+  if (body.action === 'save_decision_note') {
+    const requestId = String(body.requestId ?? '');
+    const request = await ownedDocument(collections.requests, requestId, ownerId);
+    if (!request) throw new CloudBaseStoreError('没有找到这个心愿', 404);
+    const note = String(body.note ?? '').trim().slice(0, 2000);
+    await db.collection(collections.requests).doc(requestId).update({ decision_note: note });
+    return { ok: true };
+  }
+
   if (body.action === 'decide') {
     const decision = String(body.decision) as ReviewChoice;
     if (!['BUY_NOW', 'SAVE_FIRST', 'WAIT'].includes(decision)) throw new CloudBaseStoreError('无效决定');
@@ -233,8 +242,9 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     const source = await ownedDocument(collections.requests, requestId, ownerId);
     if (!source || source.status !== 'REVIEWING') throw new CloudBaseStoreError('这个心愿已经完成决定', 409);
 
+    const note = String(body.note ?? '').trim().slice(0, 2000);
     const status = decision === 'BUY_NOW' ? 'PURCHASED' : decision === 'SAVE_FIRST' ? 'SAVING' : 'ARCHIVED';
-    await db.collection(collections.requests).doc(requestId).update({ status });
+    await db.collection(collections.requests).doc(requestId).update(note ? { status, decision_note: note } : { status });
     await saveDocument(collections.decisions, `decision-${requestId}`, { owner_id: ownerId, request_id: requestId, decision, decided_at: now() });
     const invites = (await ownerDocuments(collections.invites, ownerId)).filter(item => item.request_id === requestId && !item.used_at);
     await Promise.all(invites.map(invite => db.collection(collections.invites).doc(String(invite.id || invite._id)).update({ revoked: 1 })));

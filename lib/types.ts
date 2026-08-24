@@ -1,6 +1,6 @@
 export type ReviewChoice = 'BUY_NOW' | 'SAVE_FIRST' | 'WAIT';
 export type RequestStatus = 'REVIEWING' | 'SAVING' | 'PURCHASED' | 'ARCHIVED';
-export interface PurchaseRequest { id:string; name:string; price:number; reason:string; category:string; total_units:number|null; usage_frequency:string|null; expiry_date:string|null; product_url:string|null; similar_item:string|null; status:RequestStatus; review_token:string; created_at:string; review_count:number; }
+export interface PurchaseRequest { id:string; name:string; price:number; reason:string; category:string; total_units:number|null; usage_frequency:string|null; expiry_date:string|null; product_url:string|null; similar_item:string|null; status:RequestStatus; review_token:string; created_at:string; review_count:number; decision_note?:string; }
 export interface Review { id:string; request_id:string; reviewer_name:string; choice:ReviewChoice; comment:string; created_at:string; }
 export interface ReviewInvite { id:string; request_id:string; token:string; label:string; used_by:string|null; used_at:string|null; revoked:number; created_at:string; }
 export interface SavingGoal { id:string; request_id:string|null; name:string; target:number; current:number; weekly_plan:number|null; created_at:string; }
