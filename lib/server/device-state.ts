@@ -1,4 +1,5 @@
 import type { AppData, Asset, DeviceState } from '@/lib/types';
+import { effectiveUsedUnits } from '@/lib/asset-rules';
 
 const clamp=(value:number,min=0,max=1)=>Math.min(max,Math.max(min,value));
 const dayMs=86_400_000;
@@ -10,12 +11,13 @@ function daysBetween(date:string|null|undefined, now:number) {
 }
 
 function assetProgress(asset:Asset) {
-  if(asset.total_units!=null && asset.total_units>0)return clamp(asset.used_units/asset.total_units);
+  if(asset.type==='STORED_VALUE' && asset.purchase_price>0)return clamp(1-Number(asset.current_balance ?? 0)/asset.purchase_price);
+  if(asset.total_units!=null && asset.total_units>0)return clamp(effectiveUsedUnits(asset)/asset.total_units);
   return clamp(asset.usage_count/30);
 }
 
 function assetState(asset:Asset, now:number):DeviceState {
-  const remaining=asset.total_units==null?null:Math.max(0,asset.total_units-asset.used_units);
+  const remaining=asset.type==='STORED_VALUE'?Number(asset.current_balance ?? 0):asset.total_units==null?null:Math.max(0,asset.total_units-effectiveUsedUnits(asset));
   const daysLeft=daysBetween(asset.expiry_date,now);
   const progress=assetProgress(asset);
   const lastUsed=asset.last_used_at?new Date(`${asset.last_used_at.slice(0,10)}T12:00:00`).getTime():NaN;

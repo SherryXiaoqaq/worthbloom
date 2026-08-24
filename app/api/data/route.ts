@@ -5,10 +5,9 @@ import { CloudBaseStoreError, handleCloudBaseDataAction, loadCloudBaseData } fro
 import { getLocalData, handleLocalDataAction, isLocalPreview, LocalStoreError } from '@/lib/server/local-store';
 import { isOwnerRequest, ownerOnly } from '@/lib/server/owner';
 import type { Asset, ReviewChoice } from '@/lib/types';
+import { applyAssetUsage, AssetRuleError, parseAssetPayload } from '@/lib/asset-rules';
 
 export const dynamic = 'force-dynamic';
-
-const assetTypes: Asset['type'][] = ['COURSE', 'MEMBERSHIP', 'STORED_VALUE', 'ITEM'];
 
 function requestType(category: string): Asset['type'] {
   if (category.includes('课程')) return 'COURSE';
@@ -127,18 +126,11 @@ export async function POST(request: Request) {
     }
 
     if (body.action === 'add_asset') {
-      const payload = body.payload as Record<string, string | number | null>;
-      const name = String(payload.name ?? '').trim();
-      const type = String(payload.type ?? 'ITEM') as Asset['type'];
-      const price = Number(payload.purchase_price);
-      if (!name || !assetTypes.includes(type) || !Number.isFinite(price) || price < 0) return Response.json({ error: '请完整填写物资名称、类型和购入金额' }, { status: 400 });
       const id = crypto.randomUUID();
-      const totalUnits = payload.total_units === null || payload.total_units === '' ? null : Math.max(0, Number(payload.total_units));
-      const usedUnits = Math.max(0, Number(payload.used_units ?? 0));
-      const usageCount = Math.max(0, Number(payload.usage_count ?? usedUnits));
-      const balance = payload.current_balance === null || payload.current_balance === '' ? null : Math.max(0, Number(payload.current_balance));
+      let asset:Asset;
+      try{asset=parseAssetPayload(id,body.payload as Record<string,unknown>)}catch(error){if(error instanceof AssetRuleError)return Response.json({error:error.message},{status:error.status});throw error}
       await db.prepare(`INSERT INTO assets (id,name,type,purchase_price,total_units,used_units,current_balance,expiry_date,usage_count,last_used_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
-        .bind(id, name, type, price, totalUnits, usedUnits, balance, payload.expiry_date || null, usageCount, usageCount ? new Date().toISOString().slice(0, 10) : null).run();
+        .bind(asset.id,asset.name,asset.type,asset.purchase_price,asset.total_units,asset.used_units,asset.current_balance,asset.expiry_date,asset.usage_count,asset.last_used_at).run();
       return Response.json({ asset: await db.prepare(`SELECT * FROM assets WHERE id = ?`).bind(id).first() }, { status: 201 });
     }
 
@@ -153,12 +145,16 @@ export async function POST(request: Request) {
 
     if (body.action === 'use_asset') {
       const assetId = String(body.assetId ?? '');
+      const asset=await db.prepare(`SELECT * FROM assets WHERE id = ?`).bind(assetId).first<Asset>();
+      if(!asset)return Response.json({error:'没有找到这个物资'},{status:404});
+      let usage;
+      try{usage=applyAssetUsage(asset,body.amount)}catch(error){if(error instanceof AssetRuleError)return Response.json({error:error.message},{status:error.status});throw error}
       const eventId = crypto.randomUUID();
       await db.batch([
-        db.prepare(`UPDATE assets SET used_units = CASE WHEN total_units IS NULL THEN used_units ELSE MIN(total_units, used_units + 1) END, usage_count = usage_count + 1, last_used_at = date('now') WHERE id = ?`).bind(assetId),
-        db.prepare(`INSERT INTO usage_records (id,asset_id,usage_type,client_event_id) VALUES (?,?,?,?)`).bind(crypto.randomUUID(), assetId, 'USED_TODAY', eventId),
+        db.prepare(`UPDATE assets SET used_units = ?, usage_count = ?, current_balance = ?, last_used_at = date('now') WHERE id = ?`).bind(usage.used_units,usage.usage_count,usage.current_balance,assetId),
+        db.prepare(`INSERT INTO usage_records (id,asset_id,usage_type,amount,client_event_id) VALUES (?,?,?,?,?)`).bind(crypto.randomUUID(), assetId, asset.type==='STORED_VALUE'?'SPEND':'USED_TODAY',usage.amount,eventId),
       ]);
-      return Response.json({ ok: true });
+      return Response.json({ ok: true,asset:{...asset,used_units:usage.used_units,usage_count:usage.usage_count,current_balance:usage.current_balance,last_used_at:new Date().toISOString().slice(0,10)} });
     }
 
     if (body.action === 'decide') {
@@ -186,6 +182,6 @@ export async function POST(request: Request) {
 
     return Response.json({ error: '不支持的操作' }, { status: 400 });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : '操作失败' }, { status: error instanceof LocalStoreError ? error.status : 500 });
+    return Response.json({ error: error instanceof Error ? error.message : '操作失败' }, { status: error instanceof LocalStoreError||error instanceof AssetRuleError ? error.status : 500 });
   }
 }
