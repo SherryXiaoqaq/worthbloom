@@ -1,5 +1,6 @@
 import type { AppData, Asset, PurchaseRequest, ReviewChoice, ReviewInvite } from '@/lib/types';
 import { applyAssetUsage, AssetRuleError, parseAssetPayload } from '@/lib/asset-rules';
+import { isLocalPreviewHostname } from '@/lib/server/network';
 
 declare global {
   var __worthBloomLocalStore: AppData | undefined;
@@ -41,8 +42,11 @@ function store() {
 }
 
 export function isLocalPreview(request:Request) {
-  const hostname = new URL(request.url).hostname;
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  // When Next.js listens on 0.0.0.0 it may normalize request.url to the
+  // listening address. The Host header still contains the address the phone
+  // or browser actually used, so prefer it for local-preview detection.
+  const host = request.headers.get('host') || new URL(request.url).hostname;
+  return isLocalPreviewHostname(host);
 }
 
 export function getLocalData(): AppData {
