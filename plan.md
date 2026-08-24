@@ -1,68 +1,63 @@
 # WorthBloom · CloudBase 接入 + UI 合并 计划
 
-> 更新：2026-08-24
-> 说明：队友把后端从 Supabase 换成 CloudBase（腾讯云），代码已推 GitHub `feature-cloudbase` 分支。
-> 目标：① 创建 CloudBase 数据库 ② 把我改的纸感 UI 合并进 feature 版（保留 CloudBase 功能）③ push 回 feature-cloudbase 分支。
+> 更新：2026-08-24（合并队友 main 完成，分支已推 GitHub）
+> 说明：队友把后端换成 CloudBase（腾讯云）。全部工作已在合并工作区 `E:\worthbloom-merged\worthbloom` 完成：纸感 UI + CloudBase 后端 + 队友的硬件/设备功能合并到一个版本。
 
-## 文件夹关系（先搞清，别拿错）
+## 当前状态（一句话）
 
-| 文件夹 | 内容 |
-|---|---|
-| `E:\worthbloom-main\worthbloom-main` | main 分支 + 我改的纸感 UI（导航箭头 / 花朵照片 flower.webp / webp 图标 / 纸感 CSS） |
-| `E:\worthbloom-feature-cloudbase\worthbloom-feature-cloudbase` | feature-cloudbase 分支（CloudBase 全套，但 UI 是队友的简洁版） |
-| `E:\worthbloom-merged\worthbloom` | **合并工作区**（feature 版副本，UI 合并在这里做，两个原文件夹不动） |
+**本地已合并完成、编译通过、可正常使用；合并结果已推 GitHub 分支 `scarlett-paper-ui`，等队友 review 后合并进 main。**
 
 ---
 
 ## ✅ 已完成
 
-- [x] 搞清楚两个文件夹的区别：feature 版=CloudBase 功能、main 版=我的纸感 UI
-- [x] 腾讯云：注册新账号 + 完成实名认证（避免在原账号上付费）
+### CloudBase 后端
+- [x] 腾讯云：注册新账号 + 实名认证（避免在原账号上付费）
 - [x] 创建 CloudBase 环境（免费体验版 / 上海 / **数据库=云数据库**）
   - 第一次在原账号建错了（PostgreSQL），已作废；改用新账号重建，选对了"云数据库"
-- [x] 创建合并工作区 `E:\worthbloom-merged\worthbloom`（复制 feature 版，原文件夹未动）
+- [x] 身份认证：开启「邮箱验证码 + 账号密码登录」
+- [x] 数据库：新建 7 个集合（名字一字不差，权限=仅管理员/服务端可读写）
+  ```
+  purchase_requests / reviews / review_invites / final_decisions
+  saving_goals / assets / usage_records
+  ```
+- [x] 拿到 2 把密钥 + 环境 ID，填入 `.env.local`（Publishable Key + 服务端 API Key）
+- [x] 本地邮箱验证码登录/注册跑通
+
+### 纸感 UI（我这边改的）
+- [x] 登录/注册页加**昵称**字段；首页问候显示昵称（按当前时间：早上好/中午好/下午好/晚上好 + 昵称），昵称存 CloudBase 资料 + localStorage
+- [x] 纸感 UI 整体合并：`globals.css`（337 行纸感 CSS + 登录门样式）、`dashboard-client.tsx`（纸感导航箭头/花朵照片/webp 底部图标）、登录页纸感化
+- [x] 物资卡底色改 **warm cream `#E4E2DA`** + 用 `black-linen-soft.png` 纹理（修掉被 black-linen 压灰的问题）
+- [x] 物资卡"物"字圆圈 → **玫瑰徽标**（`rose-badge.png`，从 rose.png 裁剪），所有物资统一
+- [x] 移除首页"小好 · 健康"文字 + 红点
+
+### Git / 合并（本次）
+- [x] 初始化 git，排除 `.env.local` 等敏感文件
+- [x] **合并队友 main**：以 `origin/main` 最新版（0ef344a）为基底，叠回全部纸感 UI 文件 + public 图片
+- [x] **补回"决定理由"（decision_note）功能**——队友新版后端把它删了，但 UI 还在用；已在 `types.ts` / `cloudbase-store.ts` / `local-store.ts` / `data/route.ts` 按原逻辑补回
+- [x] 采用队友新增的 backend/hardware/device：`hardware/`、`app/api/device/*`、`lib/asset-rules.ts`、`lib/server/device-{auth,state}.ts`、`lib/server/network.ts`、`next.config.ts`、`dev:lan` 脚本
+- [x] 编译验证：首页 HTTP 200、纸感 CSS 正常提供、所有后端路由（含 device 系列）编译零错误
+- [x] 推分支 `scarlett-paper-ui` 到 GitHub（提交署名 = Scarlett-yzy），删除旧的 `feature-cloudbase`
 
 ---
 
-## 🔄 进行中（CloudBase 控制台，还剩这些）
+## 🔄 待办
 
-- [ ] **身份认证** → 开启「邮箱验证码 + 账号密码登录」
-- [ ] **数据库** → 新建 7 个集合（名字一字不差，权限=仅管理员/服务端可读写）
-  ```
-  purchase_requests
-  reviews
-  review_invites
-  final_decisions
-  saving_goals
-  assets
-  usage_records
-  ```
-- [ ] **环境设置 → API Key** → 拿 2 把密钥（Publishable Key + 服务端 API Key）
-- [ ] 记下**环境 ID**（浏览器地址栏 `envId=worthbloom-xxxx`）
-
----
-
-## ⏳ 待完成
-
-1. CloudBase 控制台配置收尾（上面"进行中"的 4 项）
-2. 填 `.env.local`：
-   - `CLOUDBASE_ENV_ID` = 环境 ID
-   - `CLOUDBASE_REGION` = `ap-shanghai`
-   - `CLOUDBASE_PUBLISHABLE_KEY` = Publishable Key
-   - `CLOUDBASE_APIKEY` = 服务端 API Key
-3. 本地跑起来测试：`pnpm install` → `pnpm dev` → 看登录页
-4. **UI 合并**：把 main 的纸感 CSS + dashboard-client.tsx 缝进合并区，保留 `cloudBaseFetch` / 登录门 / `emptyData`
-5. 复制图片资源（`flower.webp` / `leather.png` / `nav-*.webp`）到合并区 `public/`
-6. 找队友要 **GitHub 仓库地址 + collaborator 权限**
-7. `git clone` → `checkout feature-cloudbase` → 放合并代码 → commit → pull → push
-8. （可选）部署到 CloudBase Run
+1. **[等队友]** 在 GitHub 上 review 并合并 PR：
+   - 链接：`https://github.com/SherryXiaoqaq/worthbloom/pull/new/scarlett-paper-ui`
+   - 已确认：基于她 main 最新版，模拟合并零冲突，不会动她的其他分支
+2. **浏览器功能回归**（还没在浏览器完整过一遍）：
+   登录 → 建心愿 → 生成邀请 → 朋友回信 → 决定（存钱/购买/搁置）→ 养愿卡存钱 → 购买生成物资 → 物资使用/打卡
+3. 队友合并后：本地 `git pull origin main` 同步最新
+4. （可选）部署到 CloudBase Run
 
 ---
 
 ## ⚠️ 注意事项
 
-- **服务端 API Key 严禁**提交到 GitHub / 截图发给别人
+- **服务端 API Key 严禁**提交到 GitHub / 截图发给别人；`.env.local` 带真实密钥，永不 commit
 - 免费版记得**取消自动续费**
-- 数据库类型**建后不能改**，必须是「云数据库」；`环境创建后不可切换数据库类型`
-- 不填 `.env.local` 时 App 用**演示数据**，可正常开发 UI，不阻塞
-- UI 合并时不能直接覆盖 feature 版文件，否则会把 CloudBase 功能抹掉
+- 数据库类型**建后不能改**，必须是「云数据库」
+- 不填 `.env.local` 时 App 用**演示数据**，可正常开发 UI
+- 队友仓库里有 `feature/cloudbase`（斜杠）分支——那是她/旧的，别和我们推的 `scarlett-paper-ui` 搞混
+- 本机 Turbopack 文件监听不可靠：改 CSS/TSX 后需要 kill 3000 端口 → `rm -rf .next` → 重启 `pnpm dev` 才生效
