@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { AppData, Asset, PurchaseRequest, Review, ReviewChoice, ReviewInvite, SavingGoal } from '@/lib/types';
+import { applyAssetUsage, AssetRuleError, parseAssetPayload } from '@/lib/asset-rules';
 import { getCloudBaseDb } from './cloudbase';
 
 type CloudDocument = Record<string, unknown> & { _id?: string; id?: string; owner_id?: string };
@@ -16,7 +17,6 @@ const collections = {
   usage: 'usage_records',
 } as const;
 
-const assetTypes: Asset['type'][] = ['COURSE', 'MEMBERSHIP', 'STORED_VALUE', 'ITEM'];
 const now = () => new Date().toISOString();
 const today = () => new Date().toISOString().slice(0, 10);
 const inviteToken = () => crypto.randomUUID().replaceAll('-', '').slice(0, 20);
@@ -197,29 +197,9 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
   }
 
   if (body.action === 'add_asset') {
-    const payload = body.payload as Record<string, string | number | null>;
-    const name = String(payload.name ?? '').trim();
-    const type = String(payload.type ?? 'ITEM') as Asset['type'];
-    const price = Number(payload.purchase_price);
-    if (!name || !assetTypes.includes(type) || !Number.isFinite(price) || price < 0) throw new CloudBaseStoreError('请完整填写物资名称、类型和购入金额');
-
     const id = crypto.randomUUID();
-    const totalUnits = payload.total_units === null || payload.total_units === '' ? null : Math.max(0, Number(payload.total_units));
-    const usedUnits = Math.max(0, Number(payload.used_units ?? 0));
-    const usageCount = Math.max(0, Number(payload.usage_count ?? usedUnits));
-    const balance = payload.current_balance === null || payload.current_balance === '' ? null : Math.max(0, Number(payload.current_balance));
-    const asset: Asset = {
-      id,
-      name,
-      type,
-      purchase_price: price,
-      total_units: totalUnits,
-      used_units: usedUnits,
-      current_balance: balance,
-      expiry_date: payload.expiry_date ? String(payload.expiry_date) : null,
-      usage_count: usageCount,
-      last_used_at: usageCount ? today() : null,
-    };
+    let asset:Asset;
+    try{asset=parseAssetPayload(id,body.payload as Record<string,unknown>)}catch(error){if(error instanceof AssetRuleError)throw new CloudBaseStoreError(error.message,error.status);throw error}
     await saveDocument(collections.assets, id, { ...asset, owner_id: ownerId, request_id: null, created_at: now() });
     return { asset };
   }
@@ -238,12 +218,12 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     const assetId = String(body.assetId ?? '');
     const document = await ownedDocument(collections.assets, assetId, ownerId);
     if (!document) throw new CloudBaseStoreError('没有找到这个物资', 404);
-    const totalUnits = document.total_units == null ? null : Number(document.total_units);
-    const usedUnits = totalUnits == null ? Number(document.used_units) : Math.min(totalUnits, Number(document.used_units) + 1);
-    await db.collection(collections.assets).doc(assetId).update({ used_units: usedUnits, usage_count: Number(document.usage_count) + 1, last_used_at: today(), recovering_until: new Date(Date.now() + 10_000).toISOString() });
+    let usage;
+    try{usage=applyAssetUsage(cleanDocument(document) as unknown as Asset,body.amount)}catch(error){if(error instanceof AssetRuleError)throw new CloudBaseStoreError(error.message,error.status);throw error}
+    await db.collection(collections.assets).doc(assetId).update({ used_units:usage.used_units,usage_count:usage.usage_count,current_balance:usage.current_balance,last_used_at: today(), recovering_until: new Date(Date.now() + 10_000).toISOString() });
     const usageId = crypto.randomUUID();
-    await saveDocument(collections.usage, usageId, { owner_id: ownerId, asset_id: assetId, usage_type: 'USED_TODAY', client_event_id: crypto.randomUUID(), created_at: now() });
-    return { ok: true };
+    await saveDocument(collections.usage, usageId, { owner_id: ownerId, asset_id: assetId, usage_type: document.type==='STORED_VALUE'?'SPEND':'USED_TODAY', amount:usage.amount, client_event_id: crypto.randomUUID(), created_at: now() });
+    return { ok: true, asset:{...cleanDocument(document),used_units:usage.used_units,usage_count:usage.usage_count,current_balance:usage.current_balance,last_used_at:today()} };
   }
 
   if (body.action === 'decide') {
@@ -281,11 +261,13 @@ export async function recordCloudBaseDeviceUsage(ownerId:string, assetId:string,
 
   const asset = await ownedDocument(collections.assets, assetId, ownerId);
   if (!asset) throw new CloudBaseStoreError('没有找到这个物资', 404);
-  const totalUnits = asset.total_units == null ? null : Number(asset.total_units);
-  const usedUnits = totalUnits == null ? Number(asset.used_units) : Math.min(totalUnits, Number(asset.used_units) + 1);
+  if(asset.type==='STORED_VALUE')throw new CloudBaseStoreError('储值类需要在网页填写本次消费金额',400);
+  let usage;
+  try{usage=applyAssetUsage(cleanDocument(asset) as unknown as Asset)}catch(error){if(error instanceof AssetRuleError)throw new CloudBaseStoreError(error.message,error.status);throw error}
   await getCloudBaseDb().collection(collections.assets).doc(assetId).update({
-    used_units: usedUnits,
-    usage_count: Number(asset.usage_count) + 1,
+    used_units:usage.used_units,
+    usage_count:usage.usage_count,
+    current_balance:usage.current_balance,
     last_used_at: today(),
     recovering_until: new Date(Date.now() + 10_000).toISOString(),
   });

@@ -1,4 +1,5 @@
 import type { AppData, Asset, PurchaseRequest, ReviewChoice, ReviewInvite } from '@/lib/types';
+import { applyAssetUsage, AssetRuleError, parseAssetPayload } from '@/lib/asset-rules';
 
 declare global {
   var __worthBloomLocalStore: AppData | undefined;
@@ -96,9 +97,8 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     return {goal,completed:true,asset};
   }
   if (body.action === 'add_asset') {
-    const payload=body.payload as Record<string,string|number|null>; const name=String(payload.name??'').trim(); const type=String(payload.type??'ITEM') as Asset['type']; const price=Number(payload.purchase_price);
-    if(!name||!['COURSE','MEMBERSHIP','STORED_VALUE','ITEM'].includes(type)||!Number.isFinite(price)||price<0)throw new LocalStoreError('请完整填写物资名称、类型和购入金额');
-    const used=Number(payload.used_units??0); const asset:Asset={id:crypto.randomUUID(),name,type,purchase_price:price,total_units:payload.total_units==null?null:Number(payload.total_units),used_units:used,current_balance:payload.current_balance==null?null:Number(payload.current_balance),expiry_date:payload.expiry_date?String(payload.expiry_date):null,usage_count:Number(payload.usage_count??used),last_used_at:used?new Date().toISOString().slice(0,10):null};
+    let asset:Asset;
+    try{asset=parseAssetPayload(crypto.randomUUID(),body.payload as Record<string,unknown>)}catch(error){if(error instanceof AssetRuleError)throw new LocalStoreError(error.message,error.status);throw error}
     data.assets.unshift(asset); return {asset};
   }
   if (body.action === 'delete_asset') {
@@ -106,7 +106,8 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
   }
   if (body.action === 'use_asset') {
     const asset=data.assets.find(item=>item.id===String(body.assetId??'')); if(!asset)throw new LocalStoreError('没有找到这个物资',404);
-    if(asset.total_units!=null)asset.used_units=Math.min(asset.total_units,asset.used_units+1); asset.usage_count+=1; asset.last_used_at=new Date().toISOString().slice(0,10); asset.recovering_until=new Date(Date.now()+10_000).toISOString(); return {ok:true};
+    try{const usage=applyAssetUsage(asset,body.amount);asset.used_units=usage.used_units;asset.usage_count=usage.usage_count;asset.current_balance=usage.current_balance}catch(error){if(error instanceof AssetRuleError)throw new LocalStoreError(error.message,error.status);throw error}
+    asset.last_used_at=new Date().toISOString().slice(0,10); asset.recovering_until=new Date(Date.now()+10_000).toISOString(); return {ok:true,asset};
   }
   if (body.action === 'decide') {
     const decision=String(body.decision) as ReviewChoice; if(!['BUY_NOW','SAVE_FIRST','WAIT'].includes(decision))throw new LocalStoreError('无效决定');
@@ -124,8 +125,8 @@ export function recordLocalDeviceUsage(assetId:string, clientEventId:string) {
   if (globalThis.__worthBloomDeviceEvents.has(clientEventId)) return {ok:true,duplicate:true};
   const asset=store().assets.find(item=>item.id===assetId);
   if(!asset)throw new LocalStoreError('没有找到这个物资',404);
-  if(asset.total_units!=null)asset.used_units=Math.min(asset.total_units,asset.used_units+1);
-  asset.usage_count+=1;
+  if(asset.type==='STORED_VALUE')throw new LocalStoreError('储值类需要在网页填写本次消费金额',400);
+  try{const usage=applyAssetUsage(asset);asset.used_units=usage.used_units;asset.usage_count=usage.usage_count;asset.current_balance=usage.current_balance}catch(error){if(error instanceof AssetRuleError)throw new LocalStoreError(error.message,error.status);throw error}
   asset.last_used_at=new Date().toISOString().slice(0,10);
   asset.recovering_until=new Date(Date.now()+10_000).toISOString();
   globalThis.__worthBloomDeviceEvents.add(clientEventId);
