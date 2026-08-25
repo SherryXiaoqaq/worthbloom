@@ -11,6 +11,8 @@ type CloudBaseUserProfile = {
   id?: string;
   uid?: string;
   email?: string;
+  nickName?: string;
+  user_metadata?: { nickName?: string };
 };
 
 export async function requireCloudBaseUser(request: Request) {
@@ -40,5 +42,6 @@ export async function requireCloudBaseUser(request: Request) {
   const profile = await response.json() as CloudBaseUserProfile;
   const id = profile.sub || profile.id || profile.uid;
   if (!id) throw new CloudBaseAuthError('CloudBase 没有返回有效的用户 ID', 502);
-  return { id, email: profile.email || null };
+  const nickName = profile.nickName || profile.user_metadata?.nickName || null;
+  return { id, email: profile.email || null, nickName };
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { cloudBaseFetch, getCloudBaseAuth, isCloudBaseClientConfigured } from '@/lib/cloudbase/client';
+import { cloudBaseFetch, isCloudBaseClientConfigured } from '@/lib/cloudbase/client';
 import type { ProductAnalysis, PurchaseAdvice, PurchaseHabitProfile } from '@/lib/ai-types';
 import type { AppData, Asset, PurchaseRequest, ReviewChoice, ReviewInvite, SavingGoal } from '@/lib/types';
 
@@ -251,7 +251,7 @@ export default function DashboardClient() {
   const [screen,setScreen] = useState<Screen>('main');
   const [active,setActive] = useState<PurchaseRequest|null>(null);
   const [nickname,setNickname] = useState('');
-  useEffect(()=>{if(!isCloudBaseClientConfigured())return;let active=true;getCloudBaseAuth().getCurrentUser().then(user=>{if(!active)return;const u=user as {nickName?:string;email?:string;user_metadata?:Record<string,unknown>}|null;const email=u?.email||'';const fromProfile=u?.nickName||((u?.user_metadata as {nickName?:string}|null)?.nickName)||'';const fromLocal=email?localStorage.getItem(`wb-nickname:${email}`):'';setNickname(fromProfile||fromLocal||'')}).catch(()=>{});return()=>{active=false}},[]);
+  useEffect(()=>{if(!isCloudBaseClientConfigured())return;let active=true;try{const raw=localStorage.getItem('wb-auth-user');const user=raw?JSON.parse(raw) as {email?:string}|null:null;const email=user?.email||'';const name=email?localStorage.getItem(`wb-nickname:${email}`):'';if(active)setNickname(name||'')}catch{/* 忽略 */}return()=>{active=false}},[]);
   async function refresh(){try{const response=await cloudBaseFetch('/api/data',{cache:'no-store'});setData(await readApi<AppData>(response))}catch{}}
   useEffect(()=>{let active=true;cloudBaseFetch('/api/data',{cache:'no-store'}).then(response=>readApi<AppData>(response)).then(output=>{if(active)setData(output)}).catch(()=>{});return()=>{active=false}},[]);
   function choose(nextTab:Tab){setTab(nextTab);setScreen('main');setActive(null);window.scrollTo({top:0,behavior:'smooth'})}
