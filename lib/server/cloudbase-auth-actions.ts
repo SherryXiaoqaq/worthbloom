@@ -11,18 +11,25 @@ import { getCloudBaseServer } from './cloudbase';
  * 本服务器（同源）通信，跨域检查不存在，白名单限制彻底绕开。
  */
 
-type VerifyOtpFn = (params: { token: string }) => Promise<{ error?: { message?: string } | null }>;
-
 export type AuthSession = {
   accessToken: string;
   user: { id: string; email: string; nickName?: string | null };
 };
 
-// 暂存「待完成注册」的验证码校验函数（以邮箱为键）。
-// signUp() 返回的 verifyOtp 闭包只捕获注册时拿到的 verification_id，加上用户
-// 填写的验证码就是一次无状态 HTTP 调用（/v1/verification/verify），
-// 因此跨请求保存到内存 Map 是安全的，不会依赖 SDK 的全局登录态。
-const pendingVerifications = new Map<string, VerifyOtpFn>();
+// getVerification/verify 是 SDK 公开方法但未进入其主类型面，这里补一组最小类型。
+// 邮箱验证码注册是「无状态」的：发送验证码时把 verification_id 交给浏览器暂存，
+// 填码时再回传。服务端不保存任何注册中间状态——云托管会按需扩缩容/回收实例，
+// 进程内存里的状态会在两次请求之间丢失（此前「请先点击“发送邮箱验证码”」的根因）。
+type VerificationApi = {
+  getVerification(params: { email: string; usage: string }): Promise<{ verification_id?: string; is_user?: boolean }>;
+  verify(params: { verification_id: string; verification_code: string }): Promise<{ verification_token?: string }>;
+  signIn(params: { username: string; verification_token: string }): Promise<unknown>;
+  signUp(params: Record<string, unknown>): Promise<unknown>;
+};
+
+function verificationApi() {
+  return getCloudBaseServer().auth() as unknown as VerificationApi;
+}
 
 function auth() {
   return getCloudBaseServer().auth();
@@ -83,32 +90,47 @@ export async function loginWithPassword(params: { email: string; password: strin
   return session;
 }
 
-/** 发送邮箱验证码（注册第一步）。把 verifyOtp 闭包暂存，等用户填码后再校验。 */
-export async function sendEmailCode(params: { email: string; password: string }): Promise<void> {
-  let result: { error?: { message?: string } | null; data?: { verifyOtp?: VerifyOtpFn } };
+/** 发送邮箱验证码（注册第一步）。返回 verificationId/isUser，由浏览器暂存并回传。 */
+export async function sendEmailCode(params: { email: string; password: string }): Promise<{ verificationId: string; isUser: boolean }> {
+  let verification: { verification_id?: string; is_user?: boolean } | null = null;
   try {
-    result = await auth().signUp({ email: params.email, password: params.password });
+    verification = await verificationApi().getVerification({ email: params.email, usage: 'email' });
   } catch (reason) {
     throw new Error(authErrorMessage(reason, '验证码发送失败，请稍后重试'));
   }
-  if (result?.error) throw new Error(result.error.message || '验证码发送失败');
-  const verifyOtp = result?.data?.verifyOtp;
-  if (typeof verifyOtp !== 'function') throw new Error('CloudBase 没有返回验证码校验步骤');
-  pendingVerifications.set(params.email, verifyOtp);
+  const verificationId = verification?.verification_id;
+  if (!verificationId) throw new Error('CloudBase 没有返回验证码校验步骤');
+  return { verificationId, isUser: Boolean(verification?.is_user) };
 }
 
-/** 用邮箱验证码完成注册。成功后返回 accessToken 和用户信息。 */
-export async function verifyEmailCode(params: { email: string; code: string; nickname?: string }): Promise<AuthSession> {
-  const verifyOtp = pendingVerifications.get(params.email);
-  if (!verifyOtp) throw new Error('请先点击“发送邮箱验证码”');
-  let verified: { error?: { message?: string } | null };
+/** 用邮箱验证码完成注册/登录（无状态）。逻辑与 SDK 内部 verifyOtp 一致：先验码拿到
+ * verification_token，已有账号直接登录，新账号用 token + 验证码完成注册。 */
+export async function verifyEmailCode(params: {
+  email: string;
+  code: string;
+  password: string;
+  nickname?: string;
+  verificationId: string;
+  isUser: boolean;
+}): Promise<AuthSession> {
+  const api = verificationApi();
+  let verificationToken = '';
   try {
-    verified = await verifyOtp({ token: params.code.trim() });
+    const verified = await api.verify({ verification_id: params.verificationId, verification_code: params.code.trim() });
+    verificationToken = verified?.verification_token ?? '';
   } catch (reason) {
     throw new Error(authErrorMessage(reason, '验证码不正确'));
   }
-  if (verified?.error) throw new Error(verified.error.message || '验证码不正确');
-  pendingVerifications.delete(params.email);
+  if (!verificationToken) throw new Error('验证码不正确');
+  try {
+    if (params.isUser) {
+      await api.signIn({ username: params.email, verification_token: verificationToken });
+    } else {
+      await api.signUp({ email: params.email, password: params.password, verification_token: verificationToken, verification_code: params.code.trim() });
+    }
+  } catch (reason) {
+    throw new Error(authErrorMessage(reason, '注册没有完成，请稍后重试'));
+  }
   const session = await readSession();
   await tryUpdateNickname(params.nickname);
   await resetAuthSession();

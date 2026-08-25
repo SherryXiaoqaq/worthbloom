@@ -6,7 +6,7 @@ import { AUTH_TOKEN_KEY, AUTH_USER_KEY, clearStoredSession, configureCloudBaseCl
 type AuthMode = 'login' | 'register';
 type RegisterStep = 'credentials' | 'verify';
 type AuthUser = { id?: string; email?: string; nickName?: string | null };
-type AuthOutput = { ok?: boolean; error?: string; accessToken?: string; user?: AuthUser };
+type AuthOutput = { ok?: boolean; error?: string; accessToken?: string; user?: AuthUser; verificationId?: string; isUser?: boolean };
 
 function authMessage(reason: unknown) {
   if (!(reason instanceof Error)) return '登录没有成功，请稍后重试';
@@ -39,6 +39,8 @@ export default function CloudBaseAuthGate({ children, config }: { children: Reac
   const [password, setPassword] = useState('');
   const [nickname, setNickname] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
+  const [verificationId, setVerificationId] = useState('');
+  const [isUser, setIsUser] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -75,7 +77,7 @@ export default function CloudBaseAuthGate({ children, config }: { children: Reac
   }, [configured]);
 
   function switchMode(next: AuthMode) {
-    setMode(next); setStep('credentials'); setError(''); setNotice(''); setVerificationCode('');
+    setMode(next); setStep('credentials'); setError(''); setNotice(''); setVerificationCode(''); setVerificationId(''); setIsUser(false);
   }
 
   function saveSession(output: AuthOutput) {
@@ -100,11 +102,13 @@ export default function CloudBaseAuthGate({ children, config }: { children: Reac
       const payload = { email: email.trim(), password, nickname: nickname.trim() };
       if (mode === 'register') {
         if (step === 'verify') {
-          const output = await authRequest({ action: 'verify', email: payload.email, code: verificationCode.trim(), nickname: payload.nickname });
+          const output = await authRequest({ action: 'verify', email: payload.email, code: verificationCode.trim(), nickname: payload.nickname, password: payload.password, verificationId, isUser });
           saveSession(output);
           setSignedIn(true);
         } else {
-          await authRequest({ action: 'register', email: payload.email, password: payload.password });
+          const output = await authRequest({ action: 'register', email: payload.email, password: payload.password });
+          setVerificationId(output.verificationId ?? '');
+          setIsUser(Boolean(output.isUser));
           setStep('verify');
           setNotice('验证码已经发到邮箱，请在下方填写。');
         }
