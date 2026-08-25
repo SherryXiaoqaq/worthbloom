@@ -56,16 +56,26 @@ function SectionHeading({ overline,title,action,onAction }: { overline:string; t
 }
 
 function DateField({ value, onChange }: { value:string; onChange:(value:string)=>void }) {
-  const [year='',month='',day=''] = value ? value.split('-') : [];
+  // 完全受控 + 只在年月日齐全时才提交的写法会让「选一个清一个」：
+  // 父组件每次 onChange('') 都重建 state，导致组件用空 value 重算，已选的被重置。
+  // 这里改为内部本地选中态，选满三个才提交完整日期，展示不会中途丢失。
+  const parse = (v:string) => {
+    const [y='',m='',d=''] = v ? v.split('-') : [];
+    return { year:y?String(Number(y)):'', month:m?String(Number(m)):'', day:d?String(Number(d)):'' };
+  };
+  const [local,setLocal] = useState(parse(value));
+  // 只在外部传来非空值时同步（AI 填充 / 表单重置），避免父组件的空值把已选字段清掉
+  useEffect(()=>{ if (value) setLocal(parse(value)); },[value]);
   const years = Array.from({ length: 30 }, (_, i) => String(2024 + i));
   function pick(key:'year'|'month'|'day', v:string) {
-    const next = { year, month, day, [key]: v };
+    const next = { ...local, [key]: v };
+    setLocal(next);
     onChange(next.year && next.month && next.day ? `${next.year}-${next.month.padStart(2,'0')}-${next.day.padStart(2,'0')}` : '');
   }
   return <div className="date-field">
-    <select value={year} onChange={event=>pick('year',event.target.value)} aria-label="年份"><option value="">年</option>{years.map(y=><option key={y} value={y}>{y}年</option>)}</select>
-    <select value={month} onChange={event=>pick('month',event.target.value)} aria-label="月份"><option value="">月</option>{Array.from({length:12},(_,i)=>String(i+1)).map(m=><option key={m} value={m}>{m}月</option>)}</select>
-    <select value={day} onChange={event=>pick('day',event.target.value)} aria-label="日期"><option value="">日</option>{Array.from({length:31},(_,i)=>String(i+1)).map(d=><option key={d} value={d}>{d}日</option>)}</select>
+    <select value={local.year} onChange={event=>pick('year',event.target.value)} aria-label="年份"><option value="">年</option>{years.map(y=><option key={y} value={y}>{y}年</option>)}</select>
+    <select value={local.month} onChange={event=>pick('month',event.target.value)} aria-label="月份"><option value="">月</option>{Array.from({length:12},(_,i)=>String(i+1)).map(m=><option key={m} value={m}>{m}月</option>)}</select>
+    <select value={local.day} onChange={event=>pick('day',event.target.value)} aria-label="日期"><option value="">日</option>{Array.from({length:31},(_,i)=>String(i+1)).map(d=><option key={d} value={d}>{d}日</option>)}</select>
   </div>;
 }
 
@@ -239,7 +249,7 @@ function AssetsView({ assets,onUpdated,onAdd,nav }: { assets:Asset[]; onUpdated:
   const [busy,setBusy] = useState('');
   const [error,setError] = useState('');
   async function action(actionName:string, assetId:string){setBusy(assetId);setError('');try{const response=await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:actionName,assetId})});await readApi(response);onUpdated();setConfirmDelete('')}catch(reason){setError(reason instanceof Error?reason.message:'操作失败')}finally{setBusy('')}}
-  return <><TopBar title="我的物资" nav={nav}/><section className="tab-intro"><span>MY VALUE</span><h1>买下不是结尾，<br/>用起来才是。</h1><p>以前买过的也能直接添加；不想继续记录时，随时停止追踪。</p></section>{error&&<p className="form-error list-error">{error}</p>}<section className="asset-list">{assets.map(asset=>{const remain=asset.total_units==null?null:Math.max(0,asset.total_units-asset.used_units);const costPerUse=asset.usage_count?Math.round(asset.purchase_price/asset.usage_count):null;return <article key={asset.id}><div className="asset-title"><AssetGlyph/><div><span>{typeCopy[asset.type]}</span><h2>{asset.name}</h2></div></div><div className="asset-stats"><div><b>{remain==null?asset.usage_count:remain}</b><span>{remain==null?'累计使用':'剩余次数'}</span></div><div><b>{costPerUse?`¥${costPerUse}`:'—'}</b><span>单次价值</span></div><div><b>{asset.expiry_date?asset.expiry_date.slice(5).replace('-','.'):'长期'}</b><span>有效期</span></div></div><div className="asset-actions"><button disabled={busy===asset.id} onClick={()=>action('use_asset',asset.id)}>{busy===asset.id?'更新中…':'＋ 今天使用了'}</button><button className={`stop-track ${confirmDelete===asset.id?'confirming':''}`} disabled={busy===asset.id} onClick={()=>confirmDelete===asset.id?action('delete_asset',asset.id):setConfirmDelete(asset.id)}>{confirmDelete===asset.id?'确认移除':'停止追踪'}</button></div>{confirmDelete===asset.id&&<small className="delete-hint">再点一次确认移除；这不会影响其他物资。</small>}</article>})}{!assets.length&&<div className="empty-card">还没有物资。把以前买过但仍想好好使用的东西放进来吧。</div>}</section><button className="floating-create" onClick={onAdd}>＋ 添加已有物资</button></>;
+  return <><TopBar title="我的物资" nav={nav}/><section className="tab-intro"><span>MY VALUE</span><h1>买下不是结尾，<br/>用起来才是。</h1><p>以前买过的也能直接添加；不想继续记录时，随时停止追踪。</p></section>{error&&<p className="form-error list-error">{error}</p>}<section className="asset-list">{assets.map(asset=>{const remain=asset.total_units==null?null:Math.max(0,asset.total_units-asset.used_units);const costPerUse=asset.usage_count?Math.round(asset.purchase_price/asset.usage_count):null;return <article key={asset.id}><div className="asset-title"><AssetGlyph/><div><span>{typeCopy[asset.type]}</span><h2>{asset.name}</h2></div></div><div className="asset-stats"><div><b>{remain==null?'不限':remain}</b><span>剩余次数</span></div><div><b>{costPerUse?`¥${costPerUse}`:'—'}</b><span>单次价值</span></div><div><b>{asset.expiry_date?asset.expiry_date.slice(5).replace('-','.'):'长期'}</b><span>有效期</span></div></div><div className="asset-actions"><button disabled={busy===asset.id} onClick={()=>action('use_asset',asset.id)}>{busy===asset.id?'更新中…':'＋ 今天使用了'}</button><button className={`stop-track ${confirmDelete===asset.id?'confirming':''}`} disabled={busy===asset.id} onClick={()=>confirmDelete===asset.id?action('delete_asset',asset.id):setConfirmDelete(asset.id)}>{confirmDelete===asset.id?'确认移除':'停止追踪'}</button></div>{confirmDelete===asset.id&&<small className="delete-hint">再点一次确认移除；这不会影响其他物资。</small>}</article>})}{!assets.length&&<div className="empty-card">还没有物资。把以前买过但仍想好好使用的东西放进来吧。</div>}</section><button className="floating-create" onClick={onAdd}>＋ 添加已有物资</button></>;
 }
 
 const tabOrder: Tab[] = ['home','wishes','saving','assets'];
