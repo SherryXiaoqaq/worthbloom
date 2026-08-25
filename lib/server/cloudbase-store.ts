@@ -2,7 +2,7 @@ import 'server-only';
 
 import type { AppData, Asset, PurchaseRequest, Review, ReviewChoice, ReviewInvite, SavingGoal } from '@/lib/types';
 import { applyAssetUsage, AssetRuleError, parseAssetPayload } from '@/lib/asset-rules';
-import { getCloudBaseDb } from './cloudbase';
+import { getCloudBaseDb } from './cloudbase-http-db';
 
 type CloudDocument = Record<string, unknown> & { _id?: string; id?: string; owner_id?: string };
 type ActionBody = Record<string, unknown>;
