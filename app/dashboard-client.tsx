@@ -56,16 +56,26 @@ function SectionHeading({ overline,title,action,onAction }: { overline:string; t
 }
 
 function DateField({ value, onChange }: { value:string; onChange:(value:string)=>void }) {
-  const [year='',month='',day=''] = value ? value.split('-') : [];
+  // 完全受控 + 只在年月日齐全时才提交的写法会让「选一个清一个」：
+  // 父组件每次 onChange('') 都重建 state，导致组件用空 value 重算，已选的被重置。
+  // 这里改为内部本地选中态，选满三个才提交完整日期，展示不会中途丢失。
+  const parse = (v:string) => {
+    const [y='',m='',d=''] = v ? v.split('-') : [];
+    return { year:y?String(Number(y)):'', month:m?String(Number(m)):'', day:d?String(Number(d)):'' };
+  };
+  const [local,setLocal] = useState(parse(value));
+  // 只在外部传来非空值时同步（AI 填充 / 表单重置），避免父组件的空值把已选字段清掉
+  useEffect(()=>{ if (value) setLocal(parse(value)); },[value]);
   const years = Array.from({ length: 30 }, (_, i) => String(2024 + i));
   function pick(key:'year'|'month'|'day', v:string) {
-    const next = { year, month, day, [key]: v };
+    const next = { ...local, [key]: v };
+    setLocal(next);
     onChange(next.year && next.month && next.day ? `${next.year}-${next.month.padStart(2,'0')}-${next.day.padStart(2,'0')}` : '');
   }
   return <div className="date-field">
-    <select value={year} onChange={event=>pick('year',event.target.value)} aria-label="年份"><option value="">年</option>{years.map(y=><option key={y} value={y}>{y}年</option>)}</select>
-    <select value={month} onChange={event=>pick('month',event.target.value)} aria-label="月份"><option value="">月</option>{Array.from({length:12},(_,i)=>String(i+1)).map(m=><option key={m} value={m}>{m}月</option>)}</select>
-    <select value={day} onChange={event=>pick('day',event.target.value)} aria-label="日期"><option value="">日</option>{Array.from({length:31},(_,i)=>String(i+1)).map(d=><option key={d} value={d}>{d}日</option>)}</select>
+    <select value={local.year} onChange={event=>pick('year',event.target.value)} aria-label="年份"><option value="">年</option>{years.map(y=><option key={y} value={y}>{y}年</option>)}</select>
+    <select value={local.month} onChange={event=>pick('month',event.target.value)} aria-label="月份"><option value="">月</option>{Array.from({length:12},(_,i)=>String(i+1)).map(m=><option key={m} value={m}>{m}月</option>)}</select>
+    <select value={local.day} onChange={event=>pick('day',event.target.value)} aria-label="日期"><option value="">日</option>{Array.from({length:31},(_,i)=>String(i+1)).map(d=><option key={d} value={d}>{d}日</option>)}</select>
   </div>;
 }
 
