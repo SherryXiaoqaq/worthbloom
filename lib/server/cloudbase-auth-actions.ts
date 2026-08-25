@@ -50,6 +50,19 @@ async function tryUpdateNickname(nickname?: string) {
   }
 }
 
+/**
+ * 登录/注册完成后，把认证实例的用户会话清掉。
+ * accessToken 已交给浏览器，服务端无需保留用户会话；登出能避免该会话
+ * 通过共享持久化污染数据层实例（数据层必须始终保持服务端身份）。
+ */
+async function resetAuthSession() {
+  try {
+    await auth().signOut();
+  } catch {
+    /* 尽力而为，不影响已完成的登录 */
+  }
+}
+
 function authErrorMessage(reason: unknown, fallback: string) {
   if (reason instanceof Error && reason.message) return reason.message;
   return fallback;
@@ -66,6 +79,7 @@ export async function loginWithPassword(params: { email: string; password: strin
   if (result?.error) throw new Error(result.error.message || '登录失败');
   const session = await readSession();
   await tryUpdateNickname(params.nickname);
+  await resetAuthSession();
   return session;
 }
 
@@ -97,5 +111,6 @@ export async function verifyEmailCode(params: { email: string; code: string; nic
   pendingVerifications.delete(params.email);
   const session = await readSession();
   await tryUpdateNickname(params.nickname);
+  await resetAuthSession();
   return session;
 }
