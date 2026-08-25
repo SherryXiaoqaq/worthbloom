@@ -39,14 +39,18 @@ export async function POST(request: Request) {
       case 'register': {
         const password = typeof body.password === 'string' ? body.password : '';
         if (!email || !password) return json({ ok: false, error: '请填写邮箱和密码' }, 400);
-        await sendEmailCode({ email, password });
-        return json({ ok: true, message: '验证码已经发到邮箱，请在下方填写。' });
+        const { verificationId, isUser } = await sendEmailCode({ email, password });
+        return json({ ok: true, message: '验证码已经发到邮箱，请在下方填写。', verificationId, isUser });
       }
 
       case 'verify': {
         const code = typeof body.code === 'string' ? body.code : '';
+        const password = typeof body.password === 'string' ? body.password : '';
+        const verificationId = typeof body.verificationId === 'string' ? body.verificationId : '';
+        const isUser = Boolean(body.isUser);
         if (!email || !code) return json({ ok: false, error: '请填写邮箱和验证码' }, 400);
-        const session = await verifyEmailCode({ email, code, nickname });
+        if (!verificationId) return json({ ok: false, error: '请先点击“发送邮箱验证码”' }, 400);
+        const session = await verifyEmailCode({ email, code, password, nickname, verificationId, isUser });
         return sessionJson(session);
       }
 
