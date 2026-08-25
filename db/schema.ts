@@ -4,7 +4,7 @@ const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS purchase_requests (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, price REAL NOT NULL, reason TEXT NOT NULL,
     category TEXT NOT NULL, total_units INTEGER, usage_frequency TEXT, expiry_date TEXT,
-    product_url TEXT, similar_item TEXT, status TEXT NOT NULL DEFAULT 'REVIEWING',
+    product_url TEXT, similar_item TEXT, decision_note TEXT, status TEXT NOT NULL DEFAULT 'REVIEWING',
     review_token TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS reviews (
@@ -66,5 +66,9 @@ const seedStatements = [
 
 export async function ensureSchema(db: D1Database) {
   await db.batch(schemaStatements.map(sql => db.prepare(sql)));
+  const requestColumns = await db.prepare(`PRAGMA table_info(purchase_requests)`).all<{ name: string }>();
+  if (!requestColumns.results.some(column => column.name === 'decision_note')) {
+    await db.prepare(`ALTER TABLE purchase_requests ADD COLUMN decision_note TEXT`).run();
+  }
   await db.batch(seedStatements.map(sql => db.prepare(sql)));
 }

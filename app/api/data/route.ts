@@ -157,6 +157,13 @@ export async function POST(request: Request) {
       return Response.json({ ok: true,asset:{...asset,used_units:usage.used_units,usage_count:usage.usage_count,current_balance:usage.current_balance,last_used_at:new Date().toISOString().slice(0,10)} });
     }
 
+    if (body.action === 'save_decision_note') {
+      const requestId = String(body.requestId ?? '');
+      const note = String(body.note ?? '').trim().slice(0, 2000);
+      await db.prepare(`UPDATE purchase_requests SET decision_note = ? WHERE id = ?`).bind(note, requestId).run();
+      return Response.json({ ok: true });
+    }
+
     if (body.action === 'decide') {
       const decision = String(body.decision) as ReviewChoice;
       if (!['BUY_NOW','SAVE_FIRST','WAIT'].includes(decision)) return Response.json({ error: '无效决定' }, { status: 400 });
@@ -164,11 +171,14 @@ export async function POST(request: Request) {
       const source = await db.prepare(`SELECT * FROM purchase_requests WHERE id = ?`).bind(requestId).first<Record<string, unknown>>();
       if (!source || source.status !== 'REVIEWING') return Response.json({ error: '这个心愿已经完成决定' }, { status: 409 });
       const status = decision === 'BUY_NOW' ? 'PURCHASED' : decision === 'SAVE_FIRST' ? 'SAVING' : 'ARCHIVED';
-      await db.batch([
+      const statements = [
         db.prepare(`UPDATE purchase_requests SET status = ? WHERE id = ? AND status = 'REVIEWING'`).bind(status, requestId),
         db.prepare(`INSERT INTO final_decisions (request_id,decision) VALUES (?,?) ON CONFLICT(request_id) DO UPDATE SET decision=excluded.decision, decided_at=CURRENT_TIMESTAMP`).bind(requestId, decision),
         db.prepare(`UPDATE review_invites SET revoked = 1 WHERE request_id = ? AND used_at IS NULL`).bind(requestId),
-      ]);
+      ];
+      const note = String(body.note ?? '').trim().slice(0, 2000);
+      if (note) statements.push(db.prepare(`UPDATE purchase_requests SET decision_note = ? WHERE id = ?`).bind(note, requestId));
+      await db.batch(statements);
       if (decision === 'SAVE_FIRST') {
         await db.prepare(`INSERT OR IGNORE INTO saving_goals (id,request_id,name,target,current) VALUES (?,?,?,?,0)`).bind(`saving-${requestId}`, requestId, String(source.name), Number(source.price)).run();
       }

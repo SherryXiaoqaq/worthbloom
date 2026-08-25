@@ -113,10 +113,14 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     try{const usage=applyAssetUsage(asset,body.amount);asset.used_units=usage.used_units;asset.usage_count=usage.usage_count;asset.current_balance=usage.current_balance}catch(error){if(error instanceof AssetRuleError)throw new LocalStoreError(error.message,error.status);throw error}
     asset.last_used_at=new Date().toISOString().slice(0,10); asset.recovering_until=new Date(Date.now()+10_000).toISOString(); return {ok:true,asset};
   }
+  if (body.action === 'save_decision_note') {
+    const request=data.requests.find(item=>item.id===String(body.requestId??'')); if(!request)throw new LocalStoreError('没有找到这个心愿',404);
+    request.decision_note=String(body.note??'').trim().slice(0,2000); return {ok:true};
+  }
   if (body.action === 'decide') {
     const decision=String(body.decision) as ReviewChoice; if(!['BUY_NOW','SAVE_FIRST','WAIT'].includes(decision))throw new LocalStoreError('无效决定');
     const request=data.requests.find(item=>item.id===String(body.requestId??'')); if(!request||request.status!=='REVIEWING')throw new LocalStoreError('这个心愿已经完成决定',409);
-    request.status=decision==='BUY_NOW'?'PURCHASED':decision==='SAVE_FIRST'?'SAVING':'ARCHIVED'; data.invites.filter(item=>item.request_id===request.id&&!item.used_at).forEach(item=>item.revoked=1);
+    request.status=decision==='BUY_NOW'?'PURCHASED':decision==='SAVE_FIRST'?'SAVING':'ARCHIVED'; if(body.note)request.decision_note=String(body.note).trim().slice(0,2000); data.invites.filter(item=>item.request_id===request.id&&!item.used_at).forEach(item=>item.revoked=1);
     if(decision==='SAVE_FIRST'&&!data.savingGoals.some(item=>item.request_id===request.id))data.savingGoals.unshift({id:`saving-${request.id}`,request_id:request.id,name:request.name,target:request.price,current:0,weekly_plan:null,created_at:now()});
     if(decision==='BUY_NOW'&&!data.assets.some(item=>item.id===`asset-${request.id}`))data.assets.unshift({id:`asset-${request.id}`,name:request.name,type:requestType(request.category),purchase_price:request.price,total_units:request.total_units,used_units:0,current_balance:requestType(request.category)==='STORED_VALUE'?request.price:null,expiry_date:request.expiry_date,usage_count:0,last_used_at:null,bloom_until:new Date(Date.now()+20_000).toISOString()});
     return {ok:true,target:decision==='BUY_NOW'?'assets':decision==='SAVE_FIRST'?'saving':'wishes'};

@@ -57,10 +57,10 @@ export default function FriendReviewPage() {
   }
 
   if (loading) return <main className="friend-stage"><div className="friend-shell loading-card">愿望正在展开…</div></main>;
-  if (error && !wish) return <main className="friend-stage"><div className="friend-shell"><div className="friend-brand"><span>好</span><b>好好花</b></div><section className="link-error"><b>这张邀请卡已经合上</b><p>{error}</p><small>每张链接只属于一位朋友，也只能填写一次。</small></section></div></main>;
-  if (done) return <main className="friend-stage"><div className="friend-shell"><div className="friend-brand"><span>好</span><b>好好花</b></div><section className="thanks-card"><div className="thanks-flower">✿</div><span>建议已经送到</span><h1>谢谢你，认真听完了<br/>这个愿望。</h1><p>这张链接已经自动失效。<br/>你的留言只会回到心愿主人的花园。</p></section></div></main>;
+  if (error && !wish) return <main className="friend-stage"><div className="friend-shell"><div className="friend-brand"><img className="auth-logo" src="/flower2.png" alt="" draggable={false}/><b>好好花</b></div><section className="link-error"><b>这张邀请卡已经合上</b><p>{error}</p><small>每张链接只属于一位朋友，也只能填写一次。</small></section></div></main>;
+  if (done) return <main className="friend-stage"><div className="friend-shell"><div className="friend-brand"><img className="auth-logo" src="/flower2.png" alt="" draggable={false}/><b>好好花</b></div><section className="thanks-card"><img className="auth-flower" src="/flower.png" alt="" draggable={false}/><span>建议已经送到</span><h1>谢谢你，认真听完了<br/>这个愿望。</h1><p>这张链接已经自动失效。<br/>你的留言只会回到心愿主人的花园。</p></section></div></main>;
 
-  return <main className="friend-stage"><div className="friend-shell"><header className="friend-brand"><span>好</span><b>好好花</b><em>一封只给你的愿望卡</em></header>{wish && <>
+  return <main className="friend-stage"><div className="friend-shell"><header className="friend-brand"><img className="auth-logo" src="/flower2.png" alt="" draggable={false}/><b>好好花</b><em>一封只给你的愿望卡</em></header>{wish && <>
     <section className="wish-letter"><span>{wish.category} · 想听听你的看法</span><h1>{wish.name}</h1><strong>¥{wish.price.toLocaleString()}</strong><blockquote>“{wish.reason}”</blockquote><div className="wish-facts">{wish.total_units ? <div><b>{wish.total_units}</b><span>{wish.category === '旅行体验' ? '天' : '次'}</span></div> : null}{perUse ? <div><b>¥{perUse}</b><span>全部用完每次</span></div> : null}{wish.usage_frequency ? <div><b>计划</b><span>{wish.usage_frequency}</span></div> : null}</div></section>
     <form className="friend-form" onSubmit={submit}><div className="friend-question"><span>只需要填写三件事</span><h2>站在了解她的角度，<br/>给一个真诚的建议。</h2></div>
       <label><span>1 · 你的昵称 *</span><input required maxLength={20} value={name} onChange={event=>setName(event.target.value)} placeholder="昵称即可，不需要注册"/></label>
