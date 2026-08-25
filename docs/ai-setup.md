@@ -38,7 +38,7 @@ pnpm.cmd dev:lan
 
 ## 3. 上线配置
 
-部署到 CloudBase Run 或 Cloudflare 时，在项目的“环境变量 / Secrets”设置中添加同样四项。`ZHIPU_API_KEY` 必须设为 Secret；其他三项可以是普通服务端变量。不要把真实值写入仓库。
+部署到 CloudBase Run 或 Cloudflare 时，在项目的“环境变量 / Secrets”设置中添加上述配置项。`ZHIPU_API_KEY` 必须设为 Secret；模型名和基础地址可以是普通服务端变量。不要把真实值写入仓库。
 
 ## 4. 使用与限制
 
