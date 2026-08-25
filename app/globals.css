@@ -152,6 +152,22 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .request-form input,.request-form textarea,.request-form select{width:100%;border:1px solid var(--hairline);background:rgba(255,255,255,.6);border-radius:3px;padding:13px 14px;font-size:13px;outline:none;transition:border-color .2s}
 .request-form textarea{resize:vertical;line-height:1.65}
 .request-form input:focus,.request-form textarea:focus,.request-form select:focus{border-color:var(--brass);background:#fff}
+.ai-intake{margin:0 0 26px;padding:20px 18px 18px;border:1px solid rgba(163,140,88,.45);border-radius:2px 24px 2px 2px;background:linear-gradient(145deg,rgba(255,255,255,.55),rgba(233,225,204,.48));box-shadow:0 12px 26px rgba(80,67,45,.07)}
+.ai-intake>span,.ai-advice-panel>span{color:var(--brass);font-size:9px;font-weight:700;letter-spacing:.2em;text-transform:uppercase}
+.ai-intake h2,.ai-advice-panel h2{font-family:"STKaiti","KaiTi",Georgia,serif;font-size:20px;font-weight:500;line-height:1.45;margin:7px 0 4px}
+.ai-intake>p,.ai-advice-panel>p{color:var(--muted);font-size:10px;line-height:1.7;margin:0 0 17px}
+.request-form .ai-intake label{margin-bottom:13px}
+.ai-file input{padding:8px!important;font-size:10px!important;color:var(--muted)}
+.ai-file input::file-selector-button{border:0;border-right:1px solid var(--hairline);background:var(--sage-soft);color:var(--sage-dark);padding:8px 11px;margin-right:10px;font-size:10px}
+.ai-file i{display:block;color:var(--muted);font-size:9px;font-style:normal;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-analyze,.ai-advice-panel>button{width:100%;border:0;border-radius:2px;background:var(--sage-dark);color:#f7f3e9;padding:13px 12px;font-size:11px;font-weight:600;letter-spacing:.05em}
+.ai-analyze:disabled,.ai-advice-panel>button:disabled{opacity:.55}
+.ai-intake .form-error,.ai-advice-panel .form-error{margin:12px 0 0}
+.ai-result{margin-top:13px;padding:13px;border-left:2px solid var(--sage);background:rgba(223,231,216,.58)}
+.ai-result b{display:block;color:var(--sage-dark);font-size:11px}
+.ai-result p{font-size:10px;line-height:1.65;margin:5px 0;color:var(--ink)}
+.ai-result small{display:block;color:var(--muted);font-size:9px}
+.ai-result em{display:block;color:#8f6556;font-size:9px;font-style:normal;line-height:1.55;margin-top:5px}
 .field-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .date-field{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
 .date-field select{width:100%;min-width:0;padding:12px 4px;text-align:center;font-size:12px}
@@ -202,6 +218,18 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .decision-panel>div:not(.decision-note){display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .decision-panel button{border:1px solid var(--hairline);background:transparent;border-radius:2px;padding:13px 3px;font-size:11px}
 .decision-panel button:nth-child(2){background:var(--sage-dark);border-color:var(--sage-dark);color:#f2eee2}
+.ai-advice-panel{margin:30px -2px 4px;padding:22px 19px;border:1px solid rgba(163,140,88,.4);border-radius:2px 28px 2px 2px;background:rgba(255,255,255,.4)}
+.ai-advice-panel>button{margin-top:2px}
+.ai-advice{margin-top:16px;padding:18px 16px;background-color:#e7e1d2;background-image:url('/leather.png');border-left:2px solid var(--brass);box-shadow:0 9px 22px rgba(61,52,37,.08)}
+.ai-advice>small{display:block;color:var(--brass);font-size:9px;letter-spacing:.08em}
+.ai-advice h3{font-family:"STKaiti","KaiTi",Georgia,serif;font-size:20px;font-weight:500;line-height:1.45;margin:7px 0 9px}
+.ai-advice>p,.ai-advice blockquote,.ai-advice li{font-size:10px;line-height:1.75}
+.ai-advice>p{color:var(--ink)}
+.ai-advice blockquote{margin:12px 0;padding:10px 12px;background:rgba(255,255,255,.45);color:var(--muted)}
+.ai-advice>div{margin-top:13px}
+.ai-advice>div b{font-size:10px;color:var(--sage-dark);letter-spacing:.08em}
+.ai-advice ul{margin:6px 0 0;padding-left:18px;color:#5f574c}
+.ai-advice>em{display:block;margin-top:14px;padding-top:10px;border-top:1px solid var(--hairline);color:var(--muted);font-size:9px;font-style:normal}
 .decision-note{margin:-4px 0 16px;padding:14px;background:rgba(255,255,255,.5);border:1px solid var(--hairline);border-radius:2px}
 .decision-note .note-label{display:block;white-space:nowrap;margin-bottom:10px}
 .decision-note textarea{width:100%;border:1px solid var(--hairline);background:rgba(255,255,255,.7);border-radius:3px;padding:12px;font-size:10px;line-height:1.7;outline:none;resize:vertical;transition:border-color .2s}
