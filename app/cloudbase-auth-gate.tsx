@@ -49,7 +49,7 @@ export default function CloudBaseAuthGate({ children, config }: { children: Reac
     if (!configured) return;
     let active = true;
     const token = localStorage.getItem(AUTH_TOKEN_KEY);
-    if (!token) { if (active) setChecking(false); return; }
+    if (!token) { const frame=requestAnimationFrame(()=>{if(active)setChecking(false)});return()=>{active=false;cancelAnimationFrame(frame)}; }
     authRequest({ action: 'me', accessToken: token })
       .then(output => {
         if (!active) return;

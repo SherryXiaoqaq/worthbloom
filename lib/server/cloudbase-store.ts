@@ -1,8 +1,9 @@
 import 'server-only';
 
-import type { AppData, Asset, PurchaseRequest, Review, ReviewChoice, ReviewInvite, SavingGoal } from '@/lib/types';
+import type { AppData, Asset, Decision, PurchaseRequest, Review, ReviewChoice, ReviewInvite, SavingGoal } from '@/lib/types';
 import { applyAssetUsage, AssetRuleError, parseAssetPayload } from '@/lib/asset-rules';
 import { getCloudBaseDb } from './cloudbase-http-db';
+import { normalizeWish, normalizeReview, buildReviewContext } from '@/lib/wish-compat';
 
 type CloudDocument = Record<string, unknown> & { _id?: string; id?: string; owner_id?: string };
 type ActionBody = Record<string, unknown>;
@@ -15,15 +16,25 @@ const collections = {
   saving: 'saving_goals',
   assets: 'assets',
   usage: 'usage_records',
+  wishImages: 'wish_images',
+  claimTokens: 'claim_tokens',
+  growth: 'growth_accounts',
+  growthLedger: 'growth_ledger',
+  agentSessions: 'agent_sessions',
+  agentMessages: 'agent_messages',
+  agentReports: 'agent_reports',
 } as const;
+const WISH_TYPES=['COURSE_TRAINING','DURABLE_GOOD','SINGLE_USE','MEMBERSHIP','EXPERIENCE','OTHER'] as const;
 
 const now = () => new Date().toISOString();
 const today = () => new Date().toISOString().slice(0, 10);
 const inviteToken = () => crypto.randomUUID().replaceAll('-', '').slice(0, 20);
 
 export class CloudBaseStoreError extends Error {
-  constructor(message: string, public status = 400) {
+  code?: string;
+  constructor(message: string, public status = 400, code?: string) {
     super(message);
+    this.code = code;
   }
 }
 
@@ -63,12 +74,13 @@ async function saveDocument(collection: string, id: string, data: Record<string,
 }
 
 export async function loadCloudBaseData(ownerId: string): Promise<AppData> {
-  const [requestDocuments, reviewDocuments, inviteDocuments, savingDocuments, assetDocuments] = await Promise.all([
+  const [requestDocuments, reviewDocuments, inviteDocuments, savingDocuments, assetDocuments, decisionDocuments] = await Promise.all([
     ownerDocuments(collections.requests, ownerId),
     ownerDocuments(collections.reviews, ownerId),
     ownerDocuments(collections.invites, ownerId),
     ownerDocuments(collections.saving, ownerId),
     ownerDocuments(collections.assets, ownerId),
+    ownerDocuments(collections.decisions, ownerId),
   ]);
 
   const reviewCounts = new Map<string, number>();
@@ -77,15 +89,26 @@ export async function loadCloudBaseData(ownerId: string): Promise<AppData> {
     reviewCounts.set(requestId, (reviewCounts.get(requestId) || 0) + 1);
   }
 
-  const requests = newestFirst(requestDocuments.map(document => ({
-    ...cleanDocument(document),
-    review_count: reviewCounts.get(String(document.id || document._id || '')) || 0,
-  }))) as unknown as PurchaseRequest[];
+  // Wish images are stored as one doc per request: { request_id, images[], ... }
+  const imageDocs = await ownerDocuments(collections.wishImages, ownerId);
+  const imagesByRequest = new Map<string, unknown[]>();
+  for (const doc of imageDocs) {
+    if (Array.isArray(doc.images)) imagesByRequest.set(String(doc.request_id), doc.images as unknown[]);
+  }
+
+  const requests = newestFirst(requestDocuments.map(document => {
+    const cleaned = cleanDocument(document) as unknown as Record<string, unknown>;
+    const rid = String(document.id || document._id || '');
+    cleaned.review_count = reviewCounts.get(rid) || 0;
+    cleaned.images = imagesByRequest.get(rid) ?? [];
+    return normalizeWish(cleaned);
+  })) as unknown as PurchaseRequest[];
 
   return {
     requests,
-    reviews: newestFirst(reviewDocuments.map(cleanDocument)) as unknown as Review[],
+    reviews: newestFirst(reviewDocuments.map(doc => normalizeReview(cleanDocument(doc) as unknown as Record<string, unknown>))) as unknown as Review[],
     invites: newestFirst(inviteDocuments.map(cleanDocument)) as unknown as ReviewInvite[],
+    decisions: newestFirst(decisionDocuments.map(cleanDocument)) as unknown as Decision[],
     savingGoals: newestFirst(savingDocuments.map(cleanDocument)) as unknown as SavingGoal[],
     assets: newestFirst(assetDocuments.map(cleanDocument)) as unknown as Asset[],
   };
@@ -95,44 +118,98 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
   const db = getCloudBaseDb();
 
   if (body.action === 'create_request') {
-    const payload = body.payload as Record<string, string | number | null>;
-    const name = String(payload.name ?? '').trim();
-    const reason = String(payload.reason ?? '').trim();
+    const payload = body.payload as Record<string, unknown>;
+    const name = String(payload.name ?? '').trim().slice(0, 80);
+    const reason = String(payload.reason ?? '').trim().slice(0, 500);
     const price = Number(payload.price);
-    if (!name || !reason || !Number.isFinite(price) || price < 0) throw new CloudBaseStoreError('请完整填写名称、价格和理由');
+    const concern = String(payload.concern ?? payload.similar_item ?? '').trim().slice(0, 200);
+    const typeRaw = String(payload.type ?? '').trim();
+    if (!name) throw new CloudBaseStoreError('请填写商品或课程名称', 400, 'name');
+    if (!reason) throw new CloudBaseStoreError('请填写你为什么想要它', 400, 'reason');
+    if (!Number.isFinite(price) || price < 0 || price > 99_999_999.99) throw new CloudBaseStoreError('请填写有效价格', 400, 'price');
+    if (!concern) throw new CloudBaseStoreError('请填写或选择你最担心的问题', 400, 'concern');
+    if (!typeRaw || !WISH_TYPES.includes(typeRaw as typeof WISH_TYPES[number])) throw new CloudBaseStoreError('请选择类型', 400, 'type');
 
     const id = crypto.randomUUID();
     const createdAt = now();
+    const images = Array.isArray(payload.images) ? (payload.images as Array<Record<string, unknown>>).slice(0, 6).map((img, index) => ({ id: String(img.id ?? crypto.randomUUID()), url: String(img.url ?? ''), sortOrder: Number(img.sortOrder ?? index), isCover: Boolean(img.isCover) })) : [];
+    if (images.length && !images.some(img => img.isCover)) images[0].isCover = true;
     const request: PurchaseRequest = {
-      id,
-      name,
-      price,
-      reason,
-      category: String(payload.category ?? '其他'),
-      total_units: payload.total_units == null ? null : Number(payload.total_units),
-      usage_frequency: payload.usage_frequency ? String(payload.usage_frequency) : null,
-      expiry_date: payload.expiry_date ? String(payload.expiry_date) : null,
-      product_url: payload.product_url ? String(payload.product_url) : null,
-      similar_item: payload.similar_item ? String(payload.similar_item) : null,
+      id, name, price, reason,
+      category: String(payload.category ?? ''),
+      total_units: payload.total_units == null && payload.totalUnits == null ? null : Number(payload.total_units ?? payload.totalUnits),
+      usage_frequency: payload.usage_frequency ? String(payload.usage_frequency) : payload.usageFrequency ? String(payload.usageFrequency) : null,
+      expiry_date: payload.expiry_date ? String(payload.expiry_date) : payload.expiryDate ? String(payload.expiryDate) : null,
+      product_url: payload.product_url ? String(payload.product_url) : payload.productUrl ? String(payload.productUrl) : null,
+      similar_item: concern,
       status: 'REVIEWING',
       review_token: inviteToken(),
       created_at: createdAt,
+      updatedAt: createdAt,
       review_count: 0,
+      revision: 1,
+      sourceType: (payload.source_type ?? payload.sourceType ?? 'MANUAL') as PurchaseRequest['sourceType'],
+      type: typeRaw as PurchaseRequest['type'],
+      concern,
+      brand: String(payload.brand ?? '').slice(0, 80),
+      skuLabel: String(payload.sku_label ?? payload.skuLabel ?? '').slice(0, 120),
+      details: String(payload.details ?? '').slice(0, 2000),
+      sourcePlatform: String(payload.source_platform ?? payload.sourcePlatform ?? '').slice(0, 40),
+      productUrl: payload.product_url ? String(payload.product_url) : payload.productUrl ? String(payload.productUrl) : null,
+      images,
     };
     await saveDocument(collections.requests, id, { ...request, owner_id: ownerId });
+    if (images.length) await saveDocument(collections.wishImages, `${id}-images`, { owner_id: ownerId, request_id: id, images, updated_at: createdAt });
 
     const invites: ReviewInvite[] = [1, 2, 3].map(index => ({
-      id: crypto.randomUUID(),
-      request_id: id,
-      token: inviteToken(),
-      label: `朋友 ${index}`,
-      used_by: null,
-      used_at: null,
-      revoked: 0,
-      created_at: now(),
+      id: crypto.randomUUID(), request_id: id, token: inviteToken(), label: `朋友 ${index}`,
+      used_by: null, used_at: null, revoked: 0, created_at: now(),
     }));
     await Promise.all(invites.map(invite => saveDocument(collections.invites, invite.id, { ...invite, owner_id: ownerId })));
-    return { request, invites };
+    return { request: normalizeWish(request as unknown as Record<string, unknown>), invites };
+  }
+
+  if (body.action === 'update_request') {
+    const requestId = String(body.requestId ?? '');
+    const expected = Number(body.expectedRevision);
+    const request = await ownedDocument(collections.requests, requestId, ownerId);
+    if (!request) throw new CloudBaseStoreError('没有找到这个心愿', 404, 'requestId');
+    if (request.status !== 'REVIEWING') throw new CloudBaseStoreError('这个决定已经保存，可以复制为新心愿后继续调整。', 409, 'REQUEST_READ_ONLY');
+    const currentRev = Number(request.revision ?? 1);
+    if (!Number.isFinite(expected) || expected !== currentRev) throw new CloudBaseStoreError('心愿已在其他页面更新，请刷新后重试。', 409, 'REVISION_CONFLICT');
+    const payload = body.payload as Record<string, unknown>;
+    const patch: Record<string, unknown> = {};
+    if (typeof payload.name === 'string') patch.name = payload.name.trim().slice(0, 80);
+    if (typeof payload.price === 'number') patch.price = payload.price;
+    if (typeof payload.reason === 'string') patch.reason = payload.reason.trim().slice(0, 500);
+    if (typeof payload.concern === 'string') { patch.concern = payload.concern.trim().slice(0, 200); patch.similar_item = patch.concern; }
+    if (typeof payload.type === 'string') patch.type = payload.type;
+    if (typeof payload.brand === 'string') patch.brand = payload.brand.slice(0, 80);
+    if (payload.skuLabel !== undefined || payload.sku_label !== undefined) patch.skuLabel = String(payload.skuLabel ?? payload.sku_label).slice(0, 120);
+    if (typeof payload.details === 'string') patch.details = payload.details.slice(0, 2000);
+    if (payload.productUrl !== undefined || payload.product_url !== undefined) patch.productUrl = payload.productUrl ?? payload.product_url;
+    if (payload.sourcePlatform !== undefined || payload.source_platform !== undefined) patch.sourcePlatform = String(payload.sourcePlatform ?? payload.source_platform).slice(0, 40);
+    if (Array.isArray(payload.images)) {
+      const images = (payload.images as Array<Record<string, unknown>>).slice(0, 6).map((img, index) => ({ id: String(img.id ?? crypto.randomUUID()), url: String(img.url ?? ''), sortOrder: Number(img.sortOrder ?? index), isCover: Boolean(img.isCover) }));
+      if (images.length && !images.some(img => img.isCover)) images[0].isCover = true;
+      patch.images = images;
+      await saveDocument(collections.wishImages, `${requestId}-images`, { owner_id: ownerId, request_id: requestId, images, updated_at: now() });
+    }
+    const nextName=String(patch.name??request.name??'').trim();
+    const nextReason=String(patch.reason??request.reason??'').trim();
+    const nextPrice=Number(patch.price??request.price);
+    const nextConcern=String(patch.concern??request.concern??request.similar_item??'').trim();
+    const nextType=String(patch.type??request.type??'');
+    if(!nextName)throw new CloudBaseStoreError('请填写商品或课程名称',400,'name');
+    if(!nextReason)throw new CloudBaseStoreError('请填写你为什么想要它',400,'reason');
+    if(!Number.isFinite(nextPrice)||nextPrice<0||nextPrice>99_999_999.99)throw new CloudBaseStoreError('请填写有效价格',400,'price');
+    if(!nextConcern)throw new CloudBaseStoreError('请填写或选择你最担心的问题',400,'concern');
+    if(!WISH_TYPES.includes(nextType as typeof WISH_TYPES[number]))throw new CloudBaseStoreError('请选择类型',400,'type');
+    patch.revision = currentRev + 1;
+    patch.updatedAt = now();
+    patch.similar_item = patch.concern ?? request.similar_item;
+    await saveDocument(collections.requests, requestId, { ...request, ...patch, owner_id: ownerId });
+    return { request: normalizeWish({ ...request, ...patch } as unknown as Record<string, unknown>) };
   }
 
   if (body.action === 'create_invite') {
@@ -295,48 +372,63 @@ export async function getCloudBaseReview(token: string) {
   const db = getCloudBaseDb();
   const inviteResult = await db.collection(collections.invites).where({ token }).limit(1).get();
   const invite = (inviteResult.data || [])[0] as CloudDocument | undefined;
-  if (!invite) throw new CloudBaseStoreError('链接不存在或已撤销', 404);
+  if (!invite) throw new CloudBaseStoreError('链接不存在或已撤销', 404, 'REVIEW_LINK_NOT_FOUND');
   const requestResult = await db.collection(collections.requests).doc(String(invite.request_id)).get();
   const request = (requestResult.data || [])[0] as CloudDocument | undefined;
-  if (invite.revoked || invite.used_at || !request || request.status !== 'REVIEWING' || request.owner_id !== invite.owner_id) {
-    throw new CloudBaseStoreError('这张邀请卡已经完成使命了', 410);
-  }
-  return {
-    request: {
-      id: String(request.id || request._id),
-      name: request.name,
-      price: request.price,
-      reason: request.reason,
-      category: request.category,
-      total_units: request.total_units ?? null,
-      usage_frequency: request.usage_frequency ?? null,
-      expiry_date: request.expiry_date ?? null,
-      product_url: request.product_url ?? null,
-      similar_item: request.similar_item ?? null,
-      status: request.status,
-    },
+  let linkState: 'ACTIVE' | 'USED' | 'REVOKED' | 'REQUEST_DECIDED' | 'EXPIRED' = 'ACTIVE';
+  if (invite.revoked) linkState = 'REVOKED';
+  else if (invite.used_at) linkState = 'USED';
+  else if (!request || request.status !== 'REVIEWING' || request.owner_id !== invite.owner_id) linkState = 'REQUEST_DECIDED';
+  if (linkState !== 'ACTIVE') throw new CloudBaseStoreError('这张邀请卡已经完成使命了', 410, linkState);
+  const normalized = normalizeWish(request as unknown as Record<string, unknown>);
+  const requestSubset = {
+    id: normalized.id, name: normalized.name, price: normalized.price, type: normalized.type,
+    reason: normalized.reason, concern: normalized.concern, brand: normalized.brand,
+    skuLabel: normalized.skuLabel, details: normalized.details, sourcePlatform: normalized.sourcePlatform,
+    productUrl: normalized.productUrl, images: normalized.images, revision: normalized.revision,
   };
+  return { request: requestSubset, ownerDisplay: null as null, linkState: 'ACTIVE' as const };
 }
 
-export async function submitCloudBaseReview(body: { token?: string; reviewerName?: string; choice?: ReviewChoice; comment?: string }) {
-  const name = body.reviewerName?.trim();
-  const comment = body.comment?.trim();
-  if (!body.token || !name || !comment || !body.choice || !['BUY_NOW', 'SAVE_FIRST', 'WAIT'].includes(body.choice)) {
-    throw new CloudBaseStoreError('请完成昵称、建议和原因');
+export async function submitCloudBaseReview(body: { token?: string; reviewerName?: string; reviewerRole?: string; stamp?: string; reasons?: string[]; note?: string; choice?: ReviewChoice; comment?: string }) {
+  const name = (body.reviewerName?.trim() || '匿名朋友').slice(0, 20);
+  const reasons = Array.isArray(body.reasons) ? body.reasons.filter(Boolean) : [];
+  const note = body.note ? String(body.note).slice(0, 80) : '';
+  if (!body.token) throw new CloudBaseStoreError('链接不完整', 400, 'REVIEW_LINK_INVALID');
+  if (!body.stamp && !body.choice) throw new CloudBaseStoreError('请完成判断章', 400, 'REVIEW_STAMP_REQUIRED');
+  if (!body.comment) {
+    body.comment = [reasons.join('；'), note ? `备注：${note}` : ''].filter(Boolean).join('\n');
+  }
+  if (!body.comment?.trim()) throw new CloudBaseStoreError('请完成理由', 400, 'REVIEW_REASONS_REQUIRED');
+  if (body.stamp && !body.choice) {
+    const stampToChoice: Record<string, ReviewChoice> = { FITS: 'BUY_NOW', CONDITIONAL: 'SAVE_FIRST', WAIT: 'WAIT', NOT_FIT: 'WAIT', NEED_INFO: 'WAIT' };
+    body.choice = stampToChoice[body.stamp];
   }
 
   const db = getCloudBaseDb();
   const inviteResult = await db.collection(collections.invites).where({ token: body.token }).limit(1).get();
   const invite = (inviteResult.data || [])[0] as CloudDocument | undefined;
-  if (!invite || invite.revoked || invite.used_at) throw new CloudBaseStoreError('这张邀请卡已使用或心愿已结束', 409);
+  if (!invite || invite.revoked || invite.used_at) throw new CloudBaseStoreError('这张邀请卡已使用或心愿已结束', 409, 'REVIEW_LINK_USED');
   const requestResult = await db.collection(collections.requests).doc(String(invite.request_id)).get();
   const request = (requestResult.data || [])[0] as CloudDocument | undefined;
-  if (!request || request.status !== 'REVIEWING' || request.owner_id !== invite.owner_id) throw new CloudBaseStoreError('这张邀请卡已使用或心愿已结束', 409);
+  if (!request || request.status !== 'REVIEWING' || request.owner_id !== invite.owner_id) throw new CloudBaseStoreError('这张邀请卡已使用或心愿已结束', 409, 'REVIEW_LINK_USED');
 
   const usedAt = now();
-  const claimed = await db.collection(collections.invites).where({ _id: String(invite._id), used_at: null, revoked: 0 }).update({ used_by: name.slice(0, 20), used_at: usedAt });
-  if (claimed.updated !== 1) throw new CloudBaseStoreError('这张邀请卡刚刚已经被使用了', 409);
+  const claimed = await db.collection(collections.invites).where({ _id: String(invite._id), used_at: null, revoked: 0 }).update({ used_by: name, used_at: usedAt });
+  if (claimed.updated !== 1) throw new CloudBaseStoreError('这张邀请卡刚刚已经被使用了', 409, 'REVIEW_LINK_USED');
   const reviewId = crypto.randomUUID();
-  await saveDocument(collections.reviews, reviewId, { owner_id: String(invite.owner_id), request_id: String(invite.request_id), reviewer_name: name.slice(0, 20), choice: body.choice, comment: comment.slice(0, 500), created_at: usedAt });
-  return { ok: true };
+  const rev = Number(request.revision ?? 1);
+  const normalizedRequest = normalizeWish(request as unknown as Record<string, unknown>);
+  const context = buildReviewContext(normalizedRequest);
+  await saveDocument(collections.reviews, reviewId, {
+    owner_id: String(invite.owner_id), request_id: String(invite.request_id),
+    reviewer_name: name, choice: body.choice, comment: String(body.comment).slice(0, 500),
+    reviewer_role: body.reviewerRole ?? null, stamp: body.stamp ?? null,
+    reasons: JSON.stringify(reasons), note: note || null,
+    request_revision: rev, wish_snapshot: JSON.stringify(context.wishSnapshot),
+    legacy_context: 0, created_at: usedAt, claimed_by: null, claimed_at: null,
+  });
+  const claimToken = crypto.randomUUID().replaceAll('-', '');
+  await saveDocument(collections.claimTokens, claimToken, { review_id: reviewId, expires_at: new Date(Date.now() + 86_400_000).toISOString(), status: 'PENDING', created_at: usedAt });
+  return { reviewId, claimToken, successText: '感谢你的真实视角，已送到朋友手里。' };
 }
