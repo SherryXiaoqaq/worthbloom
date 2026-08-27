@@ -124,20 +124,9 @@ export default function CloudBaseAuthGate({ children, config }: { children: Reac
     }
   }
 
-  async function signOut() {
-    const token = localStorage.getItem(AUTH_TOKEN_KEY);
-    try {
-      if (token) await fetch('/api/auth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'logout', accessToken: token }) });
-    } catch { /* 忽略 */ }
-    clearStoredSession();
-    setSignedIn(false);
-    setPassword('');
-    setStep('credentials');
-  }
-
   if (!configured) return children;
   if (checking) return <main className="auth-stage"><div className="auth-loading"><img className="auth-logo" src="/flower2.png" alt="" draggable={false}/><p>正在打开愿望花园…</p></div></main>;
-  if (signedIn) return <><button className="cloudbase-signout" onClick={signOut}>退出</button>{children}</>;
+  if (signedIn) return children;
 
   return <main className="auth-stage"><section className="auth-card">
     <div className="auth-brand"><img className="auth-logo" src="/flower2.png" alt="" draggable={false}/><div><b>WORTHBLOOM</b><small>好好花 · 私人愿望花园</small></div></div>
