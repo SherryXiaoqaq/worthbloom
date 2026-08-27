@@ -1,6 +1,6 @@
 import { getDb } from '@/lib/server/db';
 import { isCloudBaseServerConfigured } from '@/lib/server/cloudbase';
-import { CloudBaseAuthError, requireCloudBaseUser } from '@/lib/server/cloudbase-auth';
+import { requireCloudBaseUser } from '@/lib/server/cloudbase-auth';
 import { getCloudBaseDb } from '@/lib/server/cloudbase-http-db';
 import { getLocalData, isLocalPreview } from '@/lib/server/local-store';
 import { isOwnerRequest } from '@/lib/server/owner';
@@ -18,20 +18,19 @@ function fail(error: string, status: number, code?: string) {
 // ---- local preview in-memory sessions ----
 const localSessions = new Map<string, AgentSession>();
 
-function loadRequestAndReviewsLocal(requestId: string): { request: PurchaseRequest; reviews: Review[] } | null {
-  // local-store getLocalData is in-memory; reuse via fetch-less direct access is awkward.
-  // Instead, the route for local preview reads from the in-memory store through getLocalData.
-  return null; // handled inline below
-}
-
-async function loadContext(request: Request, requestId: string): Promise<{ request: PurchaseRequest; reviews: Review[] } | null> {
+async function loadContext(request: Request, requestId: string, ownerId: string): Promise<{ request: PurchaseRequest; reviews: Review[] } | null> {
   if (isCloudBaseServerConfigured()) {
     const db = getCloudBaseDb();
     const reqDoc = await db.collection('purchase_requests').doc(requestId).get();
     const req = (reqDoc.data || [])[0] as Record<string, unknown> | undefined;
-    if (!req) return null;
+    if (!req || String(req.owner_id ?? '') !== ownerId) return null;
     const revDocs = await db.collection('reviews').where({ request_id: requestId }).get();
-    return { request: normalizeWish(req as Record<string, unknown>), reviews: ((revDocs.data || []) as Record<string, unknown>[]).map(normalizeReview) };
+    return {
+      request: normalizeWish(req as Record<string, unknown>),
+      reviews: ((revDocs.data || []) as Record<string, unknown>[])
+        .filter(review => String(review.owner_id ?? '') === ownerId)
+        .map(normalizeReview),
+    };
   }
   if (isLocalPreview(request)) {
     const data = getLocalData();
@@ -49,7 +48,7 @@ async function loadContext(request: Request, requestId: string): Promise<{ reque
 }
 
 // ---- D1 session ops ----
-async function d1LoadSession(sessionId: string, ownerId: string): Promise<AgentSession | null> {
+async function d1LoadSession(sessionId: string): Promise<AgentSession | null> {
   const db = await getDb();
   const s = await db.prepare(`SELECT * FROM agent_sessions WHERE id = ?`).bind(sessionId).first<Record<string, unknown>>();
   if (!s) return null;
@@ -68,7 +67,7 @@ async function d1FindInProgress(requestId: string, revision: number): Promise<Ag
   const db = await getDb();
   const s = await db.prepare(`SELECT * FROM agent_sessions WHERE request_id = ? AND request_revision = ? AND status = 'IN_PROGRESS' ORDER BY created_at DESC LIMIT 1`).bind(requestId, revision).first<Record<string, unknown>>();
   if (!s) return null;
-  return d1LoadSession(String(s.id), '');
+  return d1LoadSession(String(s.id));
 }
 
 async function d1StartSession(requestId: string, revision: number): Promise<AgentSession> {
@@ -94,10 +93,82 @@ async function d1SetStatus(session: AgentSession, status: AgentSession['status']
   session.status = status; session.report = report; session.updatedAt = ts;
 }
 
+async function cloudBaseLoadSession(sessionId: string, ownerId: string): Promise<AgentSession | null> {
+  const db = getCloudBaseDb();
+  const doc = (await db.collection('agent_sessions').doc(sessionId).get()).data?.[0] as Record<string, unknown> | undefined;
+  if (!doc || String(doc.owner_id ?? '') !== ownerId) return null;
+  const [messageResult, reportResult] = await Promise.all([
+    db.collection('agent_messages').where({ session_id: sessionId, owner_id: ownerId }).get(),
+    db.collection('agent_reports').where({ session_id: sessionId, owner_id: ownerId }).limit(1).get(),
+  ]);
+  const messages = ((messageResult.data || []) as Record<string, unknown>[])
+    .sort((left, right) => String(left.created_at ?? '').localeCompare(String(right.created_at ?? '')))
+    .map(message => ({
+      id: String(message.id || message._id || ''),
+      role: String(message.role) as AgentMessage['role'],
+      content: String(message.content ?? ''),
+      questionId: message.question_id ? String(message.question_id) : undefined,
+      skipped: Boolean(message.skipped),
+      createdAt: String(message.created_at),
+    }));
+  const reportDoc = (reportResult.data || [])[0] as Record<string, unknown> | undefined;
+  let report: AgentReport | undefined;
+  if (reportDoc?.report_json) {
+    try { report = JSON.parse(String(reportDoc.report_json)) as AgentReport; } catch { report = undefined; }
+  }
+  return {
+    id: sessionId,
+    requestId: String(doc.request_id),
+    requestRevision: Number(doc.request_revision),
+    status: String(doc.status) as AgentSession['status'],
+    messages,
+    report,
+    questionCount: Number(doc.question_count ?? 0),
+    createdAt: String(doc.created_at),
+    updatedAt: String(doc.updated_at),
+  };
+}
+
+async function cloudBaseAddMessage(session: AgentSession, message: AgentMessage, ownerId: string) {
+  const db = getCloudBaseDb();
+  const questionCount = session.questionCount + (message.role === 'ASSISTANT' && message.questionId ? 1 : 0);
+  await db.collection('agent_messages').doc(message.id).set({
+    id: message.id,
+    owner_id: ownerId,
+    session_id: session.id,
+    role: message.role,
+    content: message.content,
+    question_id: message.questionId ?? null,
+    skipped: message.skipped ? 1 : 0,
+    created_at: message.createdAt,
+  });
+  await db.collection('agent_sessions').doc(session.id).update({ question_count: questionCount, updated_at: message.createdAt });
+  session.messages.push(message);
+  session.questionCount = questionCount;
+  session.updatedAt = message.createdAt;
+}
+
+async function cloudBaseSetStatus(session: AgentSession, status: AgentSession['status'], ownerId: string, report?: AgentReport) {
+  const db = getCloudBaseDb();
+  const updatedAt = new Date().toISOString();
+  await db.collection('agent_sessions').doc(session.id).update({ status, updated_at: updatedAt });
+  if (report) {
+    await db.collection('agent_reports').doc(session.id).set({
+      owner_id: ownerId,
+      session_id: session.id,
+      report_json: JSON.stringify(report),
+      created_at: updatedAt,
+    });
+  }
+  session.status = status;
+  session.report = report;
+  session.updatedAt = updatedAt;
+}
+
 export async function POST(request: Request) {
   let userId: string;
   if (isCloudBaseServerConfigured()) {
-    try { const u = await requireCloudBaseUser(request); userId = u.id; } catch (e) { return fail('请先登录', 401, 'AUTH_REQUIRED'); }
+    try { const u = await requireCloudBaseUser(request); userId = u.id; } catch { return fail('请先登录', 401, 'AUTH_REQUIRED'); }
   } else if (!isOwnerRequest(request.headers)) {
     return fail('请先登录', 401, 'AUTH_REQUIRED');
   } else { userId = 'owner-preview'; }
@@ -110,7 +181,7 @@ export async function POST(request: Request) {
     if (body.action === 'start') {
       const requestId = String(body.requestId ?? '');
       const expected = Number(body.expectedRevision);
-      const ctx = await loadContext(request, requestId);
+      const ctx = await loadContext(request, requestId, userId);
       if (!ctx) return fail('没有找到这个心愿', 404, 'NOT_FOUND');
       const rev = ctx.request.revision ?? 1;
       if (!Number.isFinite(expected) || expected !== rev) return fail('心愿已被修改，请基于最新版本开始新对话', 409, 'REVISION_CONFLICT');
@@ -123,15 +194,15 @@ export async function POST(request: Request) {
         session = await d1FindInProgress(requestId, rev);
       } else {
         const db = getCloudBaseDb();
-        const res = await db.collection('agent_sessions').where({ request_id: requestId, request_revision: rev, status: 'IN_PROGRESS' }).limit(1).get();
+        const res = await db.collection('agent_sessions').where({ owner_id: userId, request_id: requestId, request_revision: rev, status: 'IN_PROGRESS' }).limit(1).get();
         const doc = (res.data || [])[0] as Record<string, unknown> | undefined;
-        if (doc) session = { id: String(doc.id), requestId, requestRevision: rev, status: 'IN_PROGRESS', messages: [], questionCount: Number(doc.question_count ?? 0), createdAt: String(doc.created_at), updatedAt: String(doc.updated_at) };
+        if (doc) session = await cloudBaseLoadSession(String(doc.id || doc._id || ''), userId);
       }
 
       if (!session) {
         if (useLocal) { session = { id: crypto.randomUUID(), requestId, requestRevision: rev, status: 'IN_PROGRESS', messages: [], questionCount: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; localSessions.set(session.id, session); }
         else if (!useCloudBase) { session = await d1StartSession(requestId, rev); }
-        else { const id = crypto.randomUUID(); const ts = new Date().toISOString(); const db = getCloudBaseDb(); await db.collection('agent_sessions').doc(id).set({ request_id: requestId, request_revision: rev, status: 'IN_PROGRESS', question_count: 0, created_at: ts, updated_at: ts }); session = { id, requestId, requestRevision: rev, status: 'IN_PROGRESS', messages: [], questionCount: 0, createdAt: ts, updatedAt: ts }; }
+        else { const id = crypto.randomUUID(); const ts = new Date().toISOString(); const db = getCloudBaseDb(); await db.collection('agent_sessions').doc(id).set({ id, owner_id: userId, request_id: requestId, request_revision: rev, status: 'IN_PROGRESS', question_count: 0, created_at: ts, updated_at: ts }); session = { id, requestId, requestRevision: rev, status: 'IN_PROGRESS', messages: [], questionCount: 0, createdAt: ts, updatedAt: ts }; }
       }
 
       if (session.messages.length === 0) {
@@ -143,10 +214,9 @@ export async function POST(request: Request) {
           firstQuestion = '先想想：如果买下它，你最期待的第一天会怎么使用？';
         }
         const msg: AgentMessage = { id: crypto.randomUUID(), role: 'ASSISTANT', content: firstQuestion, questionId: 'q1', createdAt: new Date().toISOString() };
-        session.messages.push(msg); session.questionCount += 1;
-        if (useLocal) { /* already in map */ }
+        if (useLocal) { session.messages.push(msg); session.questionCount += 1; session.updatedAt = msg.createdAt; }
         else if (!useCloudBase) { await d1AddMessage(session, msg); }
-        else { const db = getCloudBaseDb(); await db.collection('agent_messages').doc(msg.id).set({ session_id: session.id, role: 'ASSISTANT', content: msg.content, question_id: 'q1', skipped: 0, created_at: msg.createdAt }); await db.collection('agent_sessions').doc(session.id).update({ question_count: 1, updated_at: msg.createdAt }); }
+        else { await cloudBaseAddMessage(session, msg, userId); }
       }
       return Response.json({ session });
     }
@@ -155,26 +225,19 @@ export async function POST(request: Request) {
       const sessionId = String(body.sessionId ?? '');
       let session: AgentSession | null;
       if (useLocal) session = localSessions.get(sessionId) ?? null;
-      else if (!useCloudBase) session = await d1LoadSession(sessionId, userId);
-      else {
-        const db = getCloudBaseDb();
-        const doc = (await db.collection('agent_sessions').doc(sessionId).get()).data?.[0] as Record<string, unknown> | undefined;
-        if (!doc) session = null;
-        else {
-          const msgs = (await db.collection('agent_messages').where({ session_id: sessionId }).get()).data as Record<string, unknown>[] || [];
-          session = { id: sessionId, requestId: String(doc.request_id), requestRevision: Number(doc.request_revision), status: String(doc.status) as AgentSession['status'], messages: msgs.map(m => ({ id: String(m.id), role: String(m.role) as AgentMessage['role'], content: String(m.content), questionId: m.question_id ? String(m.question_id) : undefined, skipped: Boolean(m.skipped), createdAt: String(m.created_at) })), questionCount: Number(doc.question_count ?? 0), createdAt: String(doc.created_at), updatedAt: String(doc.updated_at) };
-        }
-      }
+      else if (!useCloudBase) session = await d1LoadSession(sessionId);
+      else session = await cloudBaseLoadSession(sessionId, userId);
       if (!session) return fail('会话不存在', 404, 'SESSION_NOT_FOUND');
       if (session.status !== 'IN_PROGRESS') return fail('会话已结束', 409, 'SESSION_CLOSED');
 
-      const ctx = await loadContext(request, session.requestId);
+      const ctx = await loadContext(request, session.requestId, userId);
       if (!ctx) return fail('心愿不存在', 404, 'NOT_FOUND');
+      if ((ctx.request.revision ?? 1) !== session.requestRevision) return fail('心愿已被修改，请基于最新版本开始新对话', 409, 'REVISION_CONFLICT');
+      if (!body.skipped && !String(body.answer ?? '').trim()) return fail('请填写回答或选择暂时跳过', 400, 'ANSWER_REQUIRED');
       const userMsg: AgentMessage = { id: crypto.randomUUID(), role: 'USER', content: body.skipped ? '' : String(body.answer ?? ''), skipped: Boolean(body.skipped), createdAt: new Date().toISOString() };
-      session.messages.push(userMsg);
-      if (useLocal) { /* in map */ }
+      if (useLocal) { session.messages.push(userMsg); session.updatedAt = userMsg.createdAt; }
       else if (!useCloudBase) { await d1AddMessage(session, userMsg); }
-      else { const db = getCloudBaseDb(); await db.collection('agent_messages').doc(userMsg.id).set({ session_id: session.id, role: 'USER', content: userMsg.content, skipped: userMsg.skipped ? 1 : 0, created_at: userMsg.createdAt }); await db.collection('agent_sessions').doc(session.id).update({ updated_at: userMsg.createdAt }); }
+      else { await cloudBaseAddMessage(session, userMsg, userId); }
 
       let readyToComplete = false;
       if (session.questionCount >= AGENT_MAX_QUESTIONS) {
@@ -185,10 +248,9 @@ export async function POST(request: Request) {
           if (turn.type === 'complete') { readyToComplete = true; }
           else {
             const qMsg: AgentMessage = { id: crypto.randomUUID(), role: 'ASSISTANT', content: turn.content, questionId: `q${session.questionCount + 1}`, createdAt: new Date().toISOString() };
-            session.messages.push(qMsg); session.questionCount += 1;
-            if (useLocal) { /* in map */ }
+            if (useLocal) { session.messages.push(qMsg); session.questionCount += 1; session.updatedAt = qMsg.createdAt; }
             else if (!useCloudBase) { await d1AddMessage(session, qMsg); }
-            else { const db = getCloudBaseDb(); await db.collection('agent_messages').doc(qMsg.id).set({ session_id: session.id, role: 'ASSISTANT', content: qMsg.content, question_id: qMsg.questionId, skipped: 0, created_at: qMsg.createdAt }); await db.collection('agent_sessions').doc(session.id).update({ question_count: session.questionCount, updated_at: qMsg.createdAt }); }
+            else { await cloudBaseAddMessage(session, qMsg, userId); }
           }
         } catch {
           readyToComplete = true;
@@ -201,15 +263,19 @@ export async function POST(request: Request) {
       const sessionId = String(body.sessionId ?? '');
       let session: AgentSession | null;
       if (useLocal) session = localSessions.get(sessionId) ?? null;
-      else if (!useCloudBase) session = await d1LoadSession(sessionId, userId);
-      else { session = null; /* CloudBase load omitted for brevity — same pattern */ }
+      else if (!useCloudBase) session = await d1LoadSession(sessionId);
+      else session = await cloudBaseLoadSession(sessionId, userId);
       if (!session) return fail('会话不存在', 404, 'SESSION_NOT_FOUND');
-      const ctx = await loadContext(request, session.requestId);
+      if (session.status === 'COMPLETED' && session.report) return Response.json({ session });
+      if (session.status !== 'IN_PROGRESS') return fail('会话已结束', 409, 'SESSION_CLOSED');
+      const ctx = await loadContext(request, session.requestId, userId);
       if (!ctx) return fail('心愿不存在', 404, 'NOT_FOUND');
+      if ((ctx.request.revision ?? 1) !== session.requestRevision) return fail('心愿已被修改，请基于最新版本开始新对话', 409, 'REVISION_CONFLICT');
       const report = await agentComplete(ctx, session.messages);
       if (useLocal) { session.status = 'COMPLETED'; session.report = report; }
       else if (!useCloudBase) { await d1SetStatus(session, 'COMPLETED', report); }
-      return Response.json({ session: { ...session, status: 'COMPLETED' as const, report } });
+      else { await cloudBaseSetStatus(session, 'COMPLETED', userId, report); }
+      return Response.json({ session });
     }
 
     if (body.action === 'dismiss') {
@@ -217,12 +283,15 @@ export async function POST(request: Request) {
       if (!body.confirmed) return fail('需要二次确认', 400, 'CONFIRM_REQUIRED');
       let session: AgentSession | null;
       if (useLocal) session = localSessions.get(sessionId) ?? null;
-      else if (!useCloudBase) session = await d1LoadSession(sessionId, userId);
-      else { session = null; }
+      else if (!useCloudBase) session = await d1LoadSession(sessionId);
+      else session = await cloudBaseLoadSession(sessionId, userId);
       if (!session) return fail('会话不存在', 404, 'SESSION_NOT_FOUND');
+      if (session.status === 'DISMISSED') return Response.json({ session });
+      if (session.status !== 'IN_PROGRESS') return fail('会话已结束', 409, 'SESSION_CLOSED');
       if (useLocal) { session.status = 'DISMISSED'; }
       else if (!useCloudBase) { await d1SetStatus(session, 'DISMISSED'); }
-      return Response.json({ session: { ...session, status: 'DISMISSED' as const } });
+      else { await cloudBaseSetStatus(session, 'DISMISSED', userId); }
+      return Response.json({ session });
     }
 
     return fail('未知操作', 400, 'UNKNOWN_ACTION');

@@ -4,6 +4,7 @@ import type { AppData, Asset, Decision, PurchaseRequest, Review, ReviewChoice, R
 import { applyAssetUsage, AssetRuleError, parseAssetPayload } from '@/lib/asset-rules';
 import { getCloudBaseDb } from './cloudbase-http-db';
 import { normalizeWish, normalizeReview, buildReviewContext } from '@/lib/wish-compat';
+import { digestClaimToken } from './claim-token';
 
 type CloudDocument = Record<string, unknown> & { _id?: string; id?: string; owner_id?: string };
 type ActionBody = Record<string, unknown>;
@@ -429,6 +430,14 @@ export async function submitCloudBaseReview(body: { token?: string; reviewerName
     legacy_context: 0, created_at: usedAt, claimed_by: null, claimed_at: null,
   });
   const claimToken = crypto.randomUUID().replaceAll('-', '');
-  await saveDocument(collections.claimTokens, claimToken, { review_id: reviewId, expires_at: new Date(Date.now() + 86_400_000).toISOString(), status: 'PENDING', created_at: usedAt });
+  const tokenDigest = await digestClaimToken(claimToken);
+  await saveDocument(collections.claimTokens, `claim-${reviewId}`, {
+    owner_id: String(invite.owner_id),
+    token_digest: tokenDigest,
+    review_id: reviewId,
+    expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+    status: 'PENDING',
+    created_at: usedAt,
+  });
   return { reviewId, claimToken, successText: '感谢你的真实视角，已送到朋友手里。' };
 }

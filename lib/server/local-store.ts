@@ -196,12 +196,11 @@ export function claimLocalReview(reviewId: string, claimToken: string, userId: s
   const digest = (review as Review & { claimTokenDigest?: string }).claimTokenDigest;
   if (!digest || digest !== claimToken) throw new LocalStoreError('认领凭据无效', 410, 'CLAIM_EXPIRED');
   if (review.claimedBy) {
-    // already claimed — return same result idempotently
+    if (review.claimedBy !== userId) throw new LocalStoreError('认领凭据已经使用', 410, 'CLAIM_ALREADY_USED');
     return { claimed: true, pointsAwarded: 10, dailyLimitReached: false, growthAccount: { userId, points: 10, level: 1 } };
   }
   review.claimedBy = userId;
   review.claimedAt = now();
-  (review as Review & { claimTokenDigest?: string }).claimTokenDigest = undefined;
   return { claimed: true, pointsAwarded: 10, dailyLimitReached: false, growthAccount: { userId, points: 10, level: 1 } };
 }
 

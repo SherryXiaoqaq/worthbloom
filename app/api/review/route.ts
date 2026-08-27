@@ -4,6 +4,7 @@ import { CloudBaseStoreError, getCloudBaseReview, submitCloudBaseReview } from '
 import { getLocalReview, isLocalPreview, LocalStoreError, submitLocalReview } from '@/lib/server/local-store';
 import { normalizeWish } from '@/lib/wish-compat';
 import type { ReviewChoice, ReviewStamp, ReviewLinkState } from '@/lib/types';
+import { digestClaimToken } from '@/lib/server/claim-token';
 
 export const dynamic = 'force-dynamic';
 
@@ -81,8 +82,8 @@ export async function POST(request: Request) {
     const claimToken = crypto.randomUUID().replaceAll('-', '');
     const wishRow = await db.prepare(`SELECT name, price, type, reason, concern FROM purchase_requests WHERE id = ?`).bind(invite.request_id).first<Record<string, unknown>>();
     const snapshot = JSON.stringify({ name: wishRow?.name ?? '', price: wishRow?.price ?? 0, type: wishRow?.type ?? 'OTHER', reason: wishRow?.reason ?? '', concern: wishRow?.concern ?? '' });
-    await db.prepare(`INSERT INTO reviews (id, request_id, reviewer_name, choice, comment, reviewer_role, stamp, reasons, note, request_revision, wish_snapshot, legacy_context) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0)`).bind(reviewId, invite.request_id, name, body.choice, body.comment.slice(0, 500), body.reviewerRole ?? null, body.stamp ?? null, JSON.stringify(reasons), note || null, invite.revision, snapshot).run();
-    await db.prepare(`INSERT INTO claim_tokens (token_digest, review_id, expires_at, status) VALUES (?,?,?,?)`).bind(claimToken, reviewId, new Date(Date.now() + 86_400_000).toISOString(), 'PENDING').run();
+    await db.prepare(`INSERT INTO reviews (id, request_id, reviewer_name, choice, comment, reviewer_role, stamp, reasons, note, request_revision, wish_snapshot, legacy_context) VALUES (?,?,?,?,?,?,?,?,?,?,?,0)`).bind(reviewId, invite.request_id, name, body.choice, body.comment.slice(0, 500), body.reviewerRole ?? null, body.stamp ?? null, JSON.stringify(reasons), note || null, invite.revision, snapshot).run();
+    await db.prepare(`INSERT INTO claim_tokens (token_digest, review_id, expires_at, status) VALUES (?,?,?,?)`).bind(await digestClaimToken(claimToken), reviewId, new Date(Date.now() + 86_400_000).toISOString(), 'PENDING').run();
     await db.prepare(`UPDATE purchase_requests SET review_count = review_count + 1 WHERE id = ?`).bind(invite.request_id).run();
     return Response.json({ reviewId, claimToken, successText: '感谢你的真实视角，已送到朋友手里。' }, { status: 201 });
   } catch (error) {
