@@ -88,7 +88,8 @@ export default function CreateWishSheet({ open, onClose, onCreated, editRequest 
   function close() { setStep('choose'); setDraft(emptyDraft); setSnapshot(null); setUrlCandidates([]); setQuestions([]); setAnswers({}); setCustomText({}); setMessage(''); onClose(); }
   function back() {
     setMessage('');
-    if (step === 'source' || step === 'confirm') setStep(draft.sourceType === 'MANUAL' ? 'choose' : 'source');
+    if (step === 'source') setStep('choose');
+    else if (step === 'confirm') setStep(draft.sourceType === 'MANUAL' ? 'choose' : 'source');
     else if (step === 'clarify') setStep('confirm');
     else close();
   }
