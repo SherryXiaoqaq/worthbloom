@@ -125,24 +125,29 @@ export default function CloudBaseAuthGate({ children, config }: { children: Reac
   }
 
   if (!configured) return children;
-  if (checking) return <main className="auth-stage"><div className="auth-loading"><img className="auth-logo" src="/flower2.png" alt="" draggable={false}/><p>正在打开愿望花园…</p></div></main>;
+  if (checking) return <main className="auth-stage"><section className="auth-card auth-loading-card"><div className="auth-loading"><span className="auth-mark" aria-hidden="true">好</span><b>WORTHBLOOM</b><p>正在打开你的好好花…</p><i aria-hidden="true"/></div></section></main>;
   if (signedIn) return children;
 
   return <main className="auth-stage"><section className="auth-card">
-    <div className="auth-brand"><img className="auth-logo" src="/flower2.png" alt="" draggable={false}/><div><b>WORTHBLOOM</b><small>好好花 · 私人愿望花园</small></div></div>
-    <img className="auth-flower" src="/flower.png" alt="" draggable={false}/>
-    <p className="auth-overline">{mode === 'login' ? '欢迎回来' : '第一次来花园'}</p>
-    <h1>{mode === 'login' ? <>继续照看那些<br/>认真种下的愿望。</> : <>为自己留一座<br/>慢慢生长的花园。</>}</h1>
-    <div className="auth-tabs"><button className={mode === 'login' ? 'active' : ''} onClick={() => switchMode('login')}>登录</button><button className={mode === 'register' ? 'active' : ''} onClick={() => switchMode('register')}>注册</button></div>
-    <form className="auth-form" onSubmit={submit}>
-      <label><span>邮箱</span><input required type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="name@example.com"/></label>
-      <label><span>{mode === 'register' ? '昵称' : '昵称（可填）'}</span><input required={mode === 'register'} maxLength={20} value={nickname} onChange={event => setNickname(event.target.value)} placeholder={mode === 'register' ? '首页会这样称呼你' : '登录时想换称呼就填一下，留空不变'}/></label>
-      <label><span>密码</span><input required minLength={8} maxLength={32} type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={event => setPassword(event.target.value)} placeholder="8–32 位，包含字母和数字"/></label>
-      {mode === 'register' && step === 'verify' && <label><span>邮箱验证码</span><input required inputMode="numeric" autoComplete="one-time-code" value={verificationCode} onChange={event => setVerificationCode(event.target.value)} placeholder="填写邮件中的验证码"/></label>}
-      {notice && <p className="auth-notice">{notice}</p>}
-      {error && <p className="form-error">{error}</p>}
-      <button className="main-button" disabled={busy}>{busy ? '请稍候…' : mode === 'login' ? '进入我的花园' : step === 'verify' ? '验证并创建花园' : '发送邮箱验证码'}</button>
-    </form>
-    <small className="auth-footnote">朋友收到独立邀请链接后仍然无需登录。</small>
+    <header className="auth-hero">
+      <div className="auth-brand"><span className="auth-mark" aria-hidden="true">好</span><div><b>WORTHBLOOM</b><small>好好花 · 把决定慢慢想清楚</small></div></div>
+      <p className="auth-overline">{mode === 'login' ? 'WELCOME BACK' : 'START YOUR GARDEN'}</p>
+      <h1>{mode === 'login' ? <>继续照看那些<br/>认真种下的愿望。</> : <>给每一个愿望<br/>留一点想清楚的时间。</>}</h1>
+      <p className="auth-intro">记录心愿、听见不同视角，再做属于自己的决定。</p>
+      <div className="auth-hero-decoration" aria-hidden="true"><span>愿</span><i/><i/><i/></div>
+    </header>
+    <div className="auth-panel">
+      <div className="auth-tabs" aria-label="登录或注册"><button type="button" className={mode === 'login' ? 'active' : ''} aria-pressed={mode === 'login'} onClick={() => switchMode('login')}>登录</button><button type="button" className={mode === 'register' ? 'active' : ''} aria-pressed={mode === 'register'} onClick={() => switchMode('register')}>注册</button></div>
+      <form className="auth-form" onSubmit={submit}>
+        <label><span>邮箱</span><input required type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="name@example.com"/></label>
+        <label><span>{mode === 'register' ? '昵称' : '昵称（可填）'}</span><input required={mode === 'register'} maxLength={20} value={nickname} onChange={event => setNickname(event.target.value)} placeholder={mode === 'register' ? '首页会这样称呼你' : '想更换称呼时填写，留空则不变'}/></label>
+        <label><span>密码</span><input required minLength={8} maxLength={32} type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={event => setPassword(event.target.value)} placeholder="8–32 位，包含字母和数字"/></label>
+        {mode === 'register' && step === 'verify' && <label><span>邮箱验证码</span><input required inputMode="numeric" autoComplete="one-time-code" value={verificationCode} onChange={event => setVerificationCode(event.target.value)} placeholder="填写邮件中的验证码"/></label>}
+        {notice && <p className="auth-notice">{notice}</p>}
+        {error && <p className="form-error">{error}</p>}
+        <button className="main-button" disabled={busy}>{busy ? '请稍候…' : mode === 'login' ? '进入我的好好花' : step === 'verify' ? '验证并创建账户' : '发送邮箱验证码'}</button>
+      </form>
+      <small className="auth-footnote">朋友通过邀请链接回信时，无需注册或登录。</small>
+    </div>
   </section></main>;
 }
