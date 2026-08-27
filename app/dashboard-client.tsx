@@ -34,6 +34,7 @@ const fallbackData: AppData = {
     { id:'invite-iceland-3', request_id:'request-iceland', token:'iceland-c2x8n5', label:'朋友 3', used_by:'安安', used_at:'2026-08-22T12:00:00Z', revoked:0, created_at:'2026-08-21T10:00:02Z' },
   ],
   savingGoals:[{ id:'saving-camera', request_id:null, name:'一台陪我看世界的相机', target:7000, current:4480, weekly_plan:500, created_at:'2026-05-12T08:00:00Z' }],
+  decisions:[],
   assets:[
     { id:'asset-dance', name:'十二节现代舞年卡', type:'COURSE', purchase_price:1680, total_units:12, used_units:9, current_balance:null, expiry_date:'2026-11-20', usage_count:9, last_used_at:'2026-08-22' },
     { id:'asset-pottery', name:'六次陶艺体验课', type:'COURSE', purchase_price:980, total_units:6, used_units:3, current_balance:null, expiry_date:'2026-09-10', usage_count:3, last_used_at:'2026-08-11' },
@@ -41,7 +42,7 @@ const fallbackData: AppData = {
   ],
 };
 
-const emptyData: AppData = { requests:[], reviews:[], invites:[], savingGoals:[], assets:[] };
+const emptyData: AppData = { requests:[], reviews:[], invites:[], decisions:[], savingGoals:[], assets:[] };
 
 function Flower({ progress=78, small=false }: { progress?:number; small?:boolean }) {
   return <div className={`wb-flower ${small?'is-small':''}`} aria-label={`电子花成长 ${progress}%`}><img className="wb-photo" src="/flower.webp" alt="" draggable={false}/></div>;
@@ -65,7 +66,7 @@ function DateField({ value, onChange }: { value:string; onChange:(value:string)=
   };
   const [local,setLocal] = useState(parse(value));
   // 只在外部传来非空值时同步（AI 填充 / 表单重置），避免父组件的空值把已选字段清掉
-  useEffect(()=>{ if (value) setLocal(parse(value)); },[value]);
+  useEffect(()=>{if(!value)return;const frame=requestAnimationFrame(()=>setLocal(parse(value)));return()=>cancelAnimationFrame(frame)},[value]);
   const years = Array.from({ length: 30 }, (_, i) => String(2024 + i));
   function pick(key:'year'|'month'|'day', v:string) {
     const next = { ...local, [key]: v };
@@ -81,12 +82,12 @@ function DateField({ value, onChange }: { value:string; onChange:(value:string)=
 
 function HomeView({ data,onRequest,onTab,nav,nickname }: { data:AppData; onRequest:(request:PurchaseRequest)=>void; onTab:(tab:Tab)=>void; nav:TopNav; nickname?:string }) {
   const activeGoal = data.savingGoals[0];
-  const inbox = data.requests.filter(request=>request.review_count>0 && request.status==='REVIEWING');
+  const inbox = data.requests.filter(request=>(request.review_count??0)>0 && request.status==='REVIEWING');
   const hour = new Date().getHours();
   const greeting = hour < 5 ? '夜深了' : hour < 12 ? '早上好' : hour < 13 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
   return <><TopBar title="好好花" nav={nav}/><section className="welcome"><p className="welcome-kicker">WORTHBLOOM · 私人的愿望花园</p><p>{nickname ? `${greeting}，${nickname}` : greeting}</p><h1>今天也让喜欢的事，<br/>慢慢长大。</h1></section>
     <section className="flower-companion"><div><h2>你把期待<br/>过成了日子。</h2><p>记录真实使用，也记录那些<br/>被认真做过的决定。</p></div><div className="bloom-gauge"><Flower progress={82} small/></div></section>
-    <section className="mobile-section"><SectionHeading overline="待你回应" title="朋友的回信到了" action="查看全部" onAction={()=>onTab('wishes')}/>{inbox.length?inbox.slice(0,1).map(request=><button className="inbox-card" key={request.id} onClick={()=>onRequest(request)}><span className="inbox-mark">✦</span><div><small>{request.review_count} 位朋友给了建议</small><h3>{request.name}</h3><p>意见不会替你决定，最后一步由你来走。</p></div><b>›</b></button>):<div className="empty-card">暂时没有新回信，去种下一个愿望吧。</div>}</section>
+    <section className="mobile-section"><SectionHeading overline="待你回应" title="朋友的回信到了" action="查看全部" onAction={()=>onTab('wishes')}/>{inbox.length?inbox.slice(0,1).map(request=><button className="inbox-card" key={request.id} onClick={()=>onRequest(request)}><span className="inbox-mark">✦</span><div><small>{request.review_count ?? 0} 位朋友给了建议</small><h3>{request.name}</h3><p>意见不会替你决定，最后一步由你来走。</p></div><b>›</b></button>):<div className="empty-card">暂时没有新回信，去种下一个愿望吧。</div>}</section>
     {activeGoal&&<section className="mobile-section"><SectionHeading overline="正在养愿" title={activeGoal.name} action="去存钱" onAction={()=>onTab('saving')}/><GoalCard key={`${activeGoal.id}:${activeGoal.current}`} goal={activeGoal} compact/></section>}
     <section className="mobile-section assets-preview"><SectionHeading overline="已经拥有" title="让它们继续产生价值" action="物资列表" onAction={()=>onTab('assets')}/><div className="mini-assets">{data.assets.slice(0,3).map(asset=><div key={asset.id}><AssetGlyph/><span>{asset.name}</span></div>)}</div></section>
   </>;
@@ -233,7 +234,7 @@ function CreateAsset({ onBack,onCreated }: { onBack:()=>void; onCreated:()=>void
 function WishesView({ data,onCreate,onRequest,nav }: { data:AppData; onCreate:()=>void; onRequest:(request:PurchaseRequest)=>void; nav:TopNav }) {
   const active = data.requests.filter(request=>request.status==='REVIEWING');
   const completed = data.requests.length-active.length;
-  return <><TopBar title="我的心愿" nav={nav}/><section className="tab-intro"><span>WANT · ASK · DECIDE</span><h1>把想要说清楚，<br/>再认真做决定。</h1></section><section className="request-list">{active.map(request=><button className="scroll-card" key={request.id} onClick={()=>onRequest(request)}><img alt="" className="scroll-card-bg" src="/scroll.png"/><div className="scroll-content"><span>{request.category} · {request.review_count} 份建议</span><h2>{request.name}</h2><p>{request.reason}</p><strong>¥{request.price.toLocaleString()}</strong><i>查看详情 →</i></div></button>)}{!active.length&&<div className="empty-card">当前没有等待决定的心愿。</div>}</section>{completed>0&&<p className="completed-note">{completed} 个心愿已经完成流程，分别进入养愿、物资或静静归档。</p>}<button className="floating-create" onClick={onCreate}>＋ 种下新愿望</button></>;
+  return <><TopBar title="我的心愿" nav={nav}/><section className="tab-intro"><span>WANT · ASK · DECIDE</span><h1>把想要说清楚，<br/>再认真做决定。</h1></section><section className="request-list">{active.map(request=><button className="scroll-card" key={request.id} onClick={()=>onRequest(request)}><img alt="" className="scroll-card-bg" src="/scroll.png"/><div className="scroll-content"><span>{request.category} · {request.review_count ?? 0} 份建议</span><h2>{request.name}</h2><p>{request.reason}</p><strong>¥{request.price.toLocaleString()}</strong><i>查看详情 →</i></div></button>)}{!active.length&&<div className="empty-card">当前没有等待决定的心愿。</div>}</section>{completed>0&&<p className="completed-note">{completed} 个心愿已经完成流程，分别进入养愿、物资或静静归档。</p>}<button className="floating-create" onClick={onCreate}>＋ 种下新愿望</button></>;
 }
 
 function SavingView({ goals,onUpdated,onCompleted,nav }: { goals:SavingGoal[]; onUpdated:()=>void; onCompleted:()=>void; nav:TopNav }) {
@@ -261,7 +262,7 @@ export default function DashboardClient() {
   const [screen,setScreen] = useState<Screen>('main');
   const [active,setActive] = useState<PurchaseRequest|null>(null);
   const [nickname,setNickname] = useState('');
-  useEffect(()=>{if(!isCloudBaseClientConfigured())return;let active=true;try{const raw=localStorage.getItem('wb-auth-user');const user=raw?JSON.parse(raw) as {email?:string}|null:null;const email=user?.email||'';const name=email?localStorage.getItem(`wb-nickname:${email}`):'';if(active)setNickname(name||'')}catch{/* 忽略 */}return()=>{active=false}},[]);
+  useEffect(()=>{if(!isCloudBaseClientConfigured())return;let active=true;let frame=0;try{const raw=localStorage.getItem('wb-auth-user');const user=raw?JSON.parse(raw) as {email?:string}|null:null;const email=user?.email||'';const name=email?localStorage.getItem(`wb-nickname:${email}`):'';frame=requestAnimationFrame(()=>{if(active)setNickname(name||'')})}catch{/* 忽略 */}return()=>{active=false;if(frame)cancelAnimationFrame(frame)}},[]);
   async function refresh(){try{const response=await cloudBaseFetch('/api/data',{cache:'no-store'});setData(await readApi<AppData>(response))}catch{}}
   useEffect(()=>{let active=true;cloudBaseFetch('/api/data',{cache:'no-store'}).then(response=>readApi<AppData>(response)).then(output=>{if(active)setData(output)}).catch(()=>{});return()=>{active=false}},[]);
   function choose(nextTab:Tab){setTab(nextTab);setScreen('main');setActive(null);window.scrollTo({top:0,behavior:'smooth'})}

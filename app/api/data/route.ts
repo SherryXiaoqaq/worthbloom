@@ -4,8 +4,9 @@ import { isCloudBaseServerConfigured } from '@/lib/server/cloudbase';
 import { CloudBaseStoreError, handleCloudBaseDataAction, loadCloudBaseData } from '@/lib/server/cloudbase-store';
 import { getLocalData, handleLocalDataAction, isLocalPreview, LocalStoreError } from '@/lib/server/local-store';
 import { isOwnerRequest, ownerOnly } from '@/lib/server/owner';
-import type { Asset, ReviewChoice } from '@/lib/types';
+import type { Asset, ReviewChoice, WishType } from '@/lib/types';
 import { applyAssetUsage, AssetRuleError, parseAssetPayload } from '@/lib/asset-rules';
+import { normalizeWish, normalizeReview, typeToCategory } from '@/lib/wish-compat';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,14 +23,28 @@ function inviteToken() {
 
 async function loadData() {
   const db = await getDb();
-  const [requests, reviews, invites, savingGoals, assets] = await Promise.all([
+  const [requests, reviews, invites, savingGoals, assets, decisions, images] = await Promise.all([
     db.prepare(`SELECT p.*, COUNT(r.id) AS review_count FROM purchase_requests p LEFT JOIN reviews r ON r.request_id = p.id GROUP BY p.id ORDER BY p.created_at DESC`).all(),
     db.prepare(`SELECT * FROM reviews ORDER BY created_at DESC`).all(),
     db.prepare(`SELECT * FROM review_invites ORDER BY created_at ASC`).all(),
     db.prepare(`SELECT * FROM saving_goals ORDER BY created_at DESC`).all(),
     db.prepare(`SELECT * FROM assets ORDER BY created_at DESC`).all(),
+    db.prepare(`SELECT request_id, decision, decided_at FROM final_decisions ORDER BY decided_at DESC`).all(),
+    db.prepare(`SELECT id, request_id, url, sort_order, is_cover FROM wish_images ORDER BY sort_order ASC`).all(),
   ]);
-  return { requests: requests.results, reviews: reviews.results, invites: invites.results, savingGoals: savingGoals.results, assets: assets.results };
+  const imagesByRequest = new Map<string, Array<{ id: string; url: string; sortOrder: number; isCover: boolean }>>();
+  for (const img of (images.results as Array<Record<string, unknown>>)) {
+    const rid = String(img.request_id);
+    const arr = imagesByRequest.get(rid) ?? [];
+    arr.push({ id: String(img.id), url: String(img.url), sortOrder: Number(img.sort_order), isCover: Boolean(img.is_cover) });
+    imagesByRequest.set(rid, arr);
+  }
+  const requestRows = (requests.results as Array<Record<string, unknown>>).map(r => {
+    r.images = imagesByRequest.get(String(r.id)) ?? [];
+    return normalizeWish(r);
+  });
+  const reviewRows = (reviews.results as Array<Record<string, unknown>>).map(r => normalizeReview(r));
+  return { requests: requestRows, reviews: reviewRows, invites: invites.results, decisions: decisions.results, savingGoals: savingGoals.results, assets: assets.results };
 }
 
 export async function GET(request: Request) {
@@ -67,20 +82,72 @@ export async function POST(request: Request) {
     const db = await getDb();
 
     if (body.action === 'create_request') {
-      const payload = body.payload as Record<string, string | number | null>;
+      const payload = body.payload as Record<string, unknown>;
       const id = crypto.randomUUID();
-      const token = crypto.randomUUID().replaceAll('-', '');
-      const name = String(payload.name ?? '').trim();
-      const reason = String(payload.reason ?? '').trim();
+      const reviewTokenValue = crypto.randomUUID().replaceAll('-', '').slice(0, 20);
+      const name = String(payload.name ?? '').trim().slice(0, 80);
+      const reason = String(payload.reason ?? '').trim().slice(0, 500);
       const price = Number(payload.price);
-      if (!name || !reason || !Number.isFinite(price) || price < 0) return Response.json({ error: '请完整填写名称、价格和理由' }, { status: 400 });
-      await db.prepare(`INSERT INTO purchase_requests (id,name,price,reason,category,total_units,usage_frequency,expiry_date,product_url,similar_item,status,review_token) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-        .bind(id, name, price, reason, String(payload.category ?? '其他'), payload.total_units ?? null, payload.usage_frequency || null, payload.expiry_date || null, payload.product_url || null, payload.similar_item || null, 'REVIEWING', token).run();
+      const concern = String(payload.concern ?? payload.similar_item ?? '').trim().slice(0, 200);
+      const typeRaw = String(payload.type ?? '').trim();
+      const validTypes = ['COURSE_TRAINING', 'DURABLE_GOOD', 'SINGLE_USE', 'MEMBERSHIP', 'EXPERIENCE', 'OTHER'];
+      if (!name) return Response.json({ error: '请填写商品或课程名称', code: 'FIELD_REQUIRED', field: 'name' }, { status: 400 });
+      if (!reason) return Response.json({ error: '请填写你为什么想要它', code: 'FIELD_REQUIRED', field: 'reason' }, { status: 400 });
+      if (!Number.isFinite(price) || price < 0 || price > 99_999_999.99) return Response.json({ error: '请填写有效价格', code: 'FIELD_REQUIRED', field: 'price' }, { status: 400 });
+      if (!concern) return Response.json({ error: '请填写或选择你最担心的问题', code: 'FIELD_REQUIRED', field: 'concern' }, { status: 400 });
+      if (!typeRaw || !validTypes.includes(typeRaw)) return Response.json({ error: '请选择类型', code: 'FIELD_REQUIRED', field: 'type' }, { status: 400 });
+      const ts = new Date().toISOString();
+      await db.prepare(`INSERT INTO purchase_requests (id,name,price,reason,category,total_units,usage_frequency,expiry_date,product_url,similar_item,status,review_token,revision,source_type,type,concern,brand,sku_label,details,source_platform,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?)`)
+        .bind(id, name, price, reason, String(payload.category ?? typeToCategory(typeRaw as WishType)), payload.total_units ?? payload.totalUnits ?? null, payload.usage_frequency ?? payload.usageFrequency ?? null, payload.expiry_date ?? payload.expiryDate ?? null, payload.product_url ?? payload.productUrl ?? null, concern, 'REVIEWING', reviewTokenValue, payload.source_type ?? payload.sourceType ?? 'MANUAL', typeRaw, concern, String(payload.brand ?? '').slice(0, 80), String(payload.sku_label ?? payload.skuLabel ?? '').slice(0, 120), String(payload.details ?? '').slice(0, 2000), String(payload.source_platform ?? payload.sourcePlatform ?? '').slice(0, 40), ts, ts).run();
+      // wish images
+      if (Array.isArray(payload.images) && payload.images.length) {
+        const imgStmts = (payload.images as Array<Record<string, unknown>>).slice(0, 6).map((img, index) => db.prepare(`INSERT INTO wish_images (id,request_id,url,sort_order,is_cover) VALUES (?,?,?,?,?)`).bind(String(img.id ?? crypto.randomUUID()), id, String(img.url ?? ''), Number(img.sortOrder ?? index), img.isCover ? 1 : index === 0 ? 1 : 0));
+        await db.batch(imgStmts);
+      }
       const inviteStatements = [1, 2, 3].map(n => db.prepare(`INSERT INTO review_invites (id,request_id,token,label) VALUES (?,?,?,?)`).bind(crypto.randomUUID(), id, inviteToken(), `朋友 ${n}`));
       await db.batch(inviteStatements);
-      const row = await db.prepare(`SELECT p.*, 0 AS review_count FROM purchase_requests p WHERE id = ?`).bind(id).first();
+      const row = (await db.prepare(`SELECT p.*, 0 AS review_count FROM purchase_requests p WHERE id = ?`).bind(id).first<Record<string, unknown>>())!;
+      row.images = (payload.images as Array<Record<string, unknown>> | undefined)?.slice(0, 6).map((img, index) => ({ id: String(img.id ?? index), url: String(img.url ?? ''), sortOrder: Number(img.sortOrder ?? index), isCover: Boolean(img.isCover) })) ?? [];
       const invites = await db.prepare(`SELECT * FROM review_invites WHERE request_id = ? ORDER BY created_at`).bind(id).all();
-      return Response.json({ request: row, invites: invites.results }, { status: 201 });
+      return Response.json({ request: normalizeWish(row), invites: invites.results }, { status: 201 });
+    }
+
+    if (body.action === 'update_request') {
+      const requestId = String(body.requestId ?? '');
+      const expected = Number(body.expectedRevision);
+      const current = await db.prepare(`SELECT status, revision FROM purchase_requests WHERE id = ?`).bind(requestId).first<{ status: string; revision: number }>();
+      if (!current) return Response.json({ error: '没有找到这个心愿', code: 'NOT_FOUND' }, { status: 404 });
+      if (current.status !== 'REVIEWING') return Response.json({ error: '这个决定已经保存，可以复制为新心愿后继续调整。', code: 'REQUEST_READ_ONLY' }, { status: 409 });
+      if (!Number.isFinite(expected) || expected !== current.revision) return Response.json({ error: '心愿已在其他页面更新，请刷新后重试。', code: 'REVISION_CONFLICT' }, { status: 409 });
+      const payload = body.payload as Record<string, unknown>;
+      const sets: string[] = [];
+      const binds: unknown[] = [];
+      const push = (col: string, val: unknown) => { sets.push(`${col} = ?`); binds.push(val); };
+      if (typeof payload.name === 'string') push('name', payload.name.trim().slice(0, 80));
+      if (typeof payload.price === 'number') push('price', payload.price);
+      if (typeof payload.reason === 'string') push('reason', payload.reason.trim().slice(0, 500));
+      if (typeof payload.concern === 'string') { push('concern', payload.concern.trim().slice(0, 200)); push('similar_item', payload.concern.trim().slice(0, 200)); }
+      if (typeof payload.type === 'string') push('type', payload.type);
+      if (typeof payload.brand === 'string') push('brand', payload.brand.slice(0, 80));
+      if (payload.skuLabel !== undefined || payload.sku_label !== undefined) push('sku_label', String(payload.skuLabel ?? payload.sku_label).slice(0, 120));
+      if (typeof payload.details === 'string') push('details', payload.details.slice(0, 2000));
+      if (payload.productUrl !== undefined || payload.product_url !== undefined) push('product_url', payload.productUrl ?? payload.product_url);
+      if (payload.sourcePlatform !== undefined || payload.source_platform !== undefined) push('source_platform', String(payload.sourcePlatform ?? payload.source_platform).slice(0, 40));
+      sets.push('revision = ?'); binds.push(current.revision + 1);
+      sets.push('updated_at = ?'); binds.push(new Date().toISOString());
+      binds.push(requestId, current.revision);
+      const res = await db.prepare(`UPDATE purchase_requests SET ${sets.join(', ')} WHERE id = ? AND revision = ?`).bind(...binds).run();
+      if (!res.meta.changes) return Response.json({ error: '心愿已在其他页面更新，请刷新后重试。', code: 'REVISION_CONFLICT' }, { status: 409 });
+      // replace images if provided
+      if (Array.isArray(payload.images)) {
+        await db.prepare(`DELETE FROM wish_images WHERE request_id = ?`).bind(requestId).run();
+        const imgStmts = (payload.images as Array<Record<string, unknown>>).slice(0, 6).map((img, index) => db.prepare(`INSERT INTO wish_images (id,request_id,url,sort_order,is_cover) VALUES (?,?,?,?,?)`).bind(String(img.id ?? crypto.randomUUID()), requestId, String(img.url ?? ''), Number(img.sortOrder ?? index), img.isCover ? 1 : index === 0 ? 1 : 0));
+        if (imgStmts.length) await db.batch(imgStmts);
+      }
+      const row = (await db.prepare(`SELECT p.*, 0 AS review_count FROM purchase_requests p WHERE id = ?`).bind(requestId).first<Record<string, unknown>>())!;
+      const imgs = await db.prepare(`SELECT id, url, sort_order, is_cover FROM wish_images WHERE request_id = ? ORDER BY sort_order`).bind(requestId).all();
+      row.images = (imgs.results as Array<Record<string, unknown>>).map(img => ({ id: String(img.id), url: String(img.url), sortOrder: Number(img.sort_order), isCover: Boolean(img.is_cover) }));
+      return Response.json({ request: normalizeWish(row) });
     }
 
     if (body.action === 'create_invite') {

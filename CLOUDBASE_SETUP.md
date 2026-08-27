@@ -20,7 +20,7 @@
 
 ## 2. 创建文档数据库集合
 
-进入“数据库 → 文档数据库”，逐个创建下面 7 个集合。权限都设为“仅管理员/服务端可读写”，不要设为所有人可读写：
+进入“数据库 → 文档数据库”，逐个创建下面 16 个集合。权限都设为“仅管理员/服务端可读写”，不要设为所有人可读写：
 
 1. `purchase_requests`
 2. `reviews`
@@ -29,8 +29,30 @@
 5. `saving_goals`
 6. `assets`
 7. `usage_records`
+8. `wish_images`
+9. `claim_tokens`
+10. `growth_accounts`
+11. `growth_ledger`
+12. `agent_sessions`
+13. `agent_messages`
+14. `agent_reports`
+15. `user_profiles`
+16. `inbox_states`
 
-建议在 `review_invites` 给 `token` 建唯一索引；其余集合给 `owner_id` 建普通索引。当前代码会在主人查询后于服务端排序，因此不要求复合排序索引。
+至少创建以下索引：
+
+- `review_invites.token`：唯一索引。
+- `claim_tokens.token_digest`：唯一索引；不要给原始 claim token 建字段或索引。
+- `growth_ledger.idempotency_key`：唯一索引。
+- `agent_sessions`：`owner_id + request_id + request_revision + status` 复合索引。
+- `agent_messages`：`owner_id + session_id` 复合索引。
+- `agent_reports`：`owner_id + session_id` 复合唯一索引。
+- `wish_images`：`owner_id + request_id` 复合唯一索引。
+- `user_profiles`：`owner_id` 唯一索引。
+- `inbox_states`：`owner_id` 唯一索引。
+- 其余主人数据集合：给 `owner_id` 建普通索引；`growth_ledger` 另给 `user_id` 建普通索引。
+
+当前代码会在主人查询后于服务端排序，因此暂不要求创建排序复合索引。
 
 集合可以是空的，不需要手工添加字段。第一次在网页创建心愿/物资时会写入完整文档。
 
@@ -89,7 +111,7 @@ pnpm.cmd dev
 
 - 页面仍是本地演示数据：四个 `CLOUDBASE_*` 环境变量没有全部填写，或修改后没有重启 `pnpm.cmd dev`。
 - 登录报“非法来源”：把当前协议+域名（本地是 `http://localhost:3000`）加入安全来源。
-- 数据库提示集合不存在：检查 7 个集合名，必须与上面完全一致。
+- 数据库提示集合不存在：检查 16 个集合名，必须与上面完全一致；尤其不要漏掉 Agent、claim、成长值、个人资料、回信状态和心愿图片相关集合。
 - 登录正常但 API 返回 401：确认浏览器和服务端使用的是同一个环境 ID，并检查系统时间。
 - 国内首次访问慢：CloudBase Run 最小实例数设为 1，并选择离主要用户近的上海地域。
 - 自定义大陆域名无法上线：需要先完成 ICP 备案；测试阶段可以先用 CloudBase 提供的默认域名。
