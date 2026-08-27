@@ -1,4 +1,4 @@
-import type { AppData, Asset, Decision, PurchaseRequest, Review, ReviewChoice, ReviewInvite } from '@/lib/types';
+import type { AppData, Asset, Decision, GrowthAccount, GrowthLedgerEntry, InboxPage, PurchaseRequest, Review, ReviewChoice, ReviewInvite, UserProfile } from '@/lib/types';
 import { applyAssetUsage, AssetRuleError, parseAssetPayload } from '@/lib/asset-rules';
 import { isLocalPreviewHostname } from '@/lib/server/network';
 import { normalizeWish, normalizeReview } from '@/lib/wish-compat';
@@ -6,6 +6,10 @@ import { normalizeWish, normalizeReview } from '@/lib/wish-compat';
 declare global {
   var __worthBloomLocalStore: AppData | undefined;
   var __worthBloomDeviceEvents: Set<string> | undefined;
+  var __worthBloomLocalProfiles: Record<string, UserProfile> | undefined;
+  var __worthBloomLocalGrowthAccounts: Record<string, GrowthAccount> | undefined;
+  var __worthBloomLocalGrowthLedger: Record<string, GrowthLedgerEntry[]> | undefined;
+  var __worthBloomLocalInboxReads: Record<string, string[]> | undefined;
 }
 
 export class LocalStoreError extends Error {
@@ -45,6 +49,34 @@ function store() {
   return globalThis.__worthBloomLocalStore;
 }
 
+function levelForPoints(points:number):1|2|3|4{return points>=700?4:points>=300?3:points>=100?2:1}
+function nextLevelPoints(level:1|2|3|4){return level===1?100:level===2?300:level===3?700:undefined}
+function defaultLocalProfile(userId:string,fallbackNickname?:string|null):UserProfile{const timestamp=now();return{userId,nickname:fallbackNickname||'好好花用户',bio:'把每一次认真思考，留给未来的自己。',shareIdentityDefault:'ANONYMOUS',createdAt:timestamp,updatedAt:timestamp}}
+function localProfiles(){globalThis.__worthBloomLocalProfiles??={};return globalThis.__worthBloomLocalProfiles}
+function localGrowthAccounts(){globalThis.__worthBloomLocalGrowthAccounts??={};return globalThis.__worthBloomLocalGrowthAccounts}
+function localGrowthLedger(){globalThis.__worthBloomLocalGrowthLedger??={};return globalThis.__worthBloomLocalGrowthLedger}
+function localInboxReads(){globalThis.__worthBloomLocalInboxReads??={};return globalThis.__worthBloomLocalInboxReads}
+
+function awardLocalGrowth(userId:string,actionType:string,referenceId:string,delta:number){
+  const ledger=localGrowthLedger();const entries=ledger[userId]??[];const idempotencyKey=`${actionType}:${referenceId}`;
+  if(entries.some(entry=>entry.idempotencyKey===idempotencyKey))return;
+  const accounts=localGrowthAccounts();const points=(accounts[userId]?.points??0)+delta;const level=levelForPoints(points);const timestamp=now();
+  accounts[userId]={userId,points,level,nextLevelPoints:nextLevelPoints(level),updatedAt:timestamp};
+  ledger[userId]=[{id:crypto.randomUUID(),userId,actionType,referenceId,delta,idempotencyKey,limited:false,createdAt:timestamp},...entries];
+}
+
+export function getLocalProfile(userId:string,fallbackNickname?:string|null){return structuredClone(localProfiles()[userId]??defaultLocalProfile(userId,fallbackNickname))}
+export function saveLocalProfile(userId:string,patch:Partial<UserProfile>,fallbackNickname?:string|null){
+  const current=localProfiles()[userId]??defaultLocalProfile(userId,fallbackNickname);const nickname=patch.nickname===undefined?current.nickname:String(patch.nickname).trim().slice(0,20);if(!nickname)throw new LocalStoreError('请填写昵称',400,'nickname');
+  const shareIdentityDefault=patch.shareIdentityDefault??current.shareIdentityDefault;if(!['ANONYMOUS','NICKNAME'].includes(shareIdentityDefault))throw new LocalStoreError('分享身份设置无效',400,'shareIdentityDefault');
+  const profile:UserProfile={...current,nickname,bio:patch.bio===undefined?current.bio:String(patch.bio).trim().slice(0,80),shareIdentityDefault,updatedAt:now()};localProfiles()[userId]=profile;
+  if(profile.nickname&&profile.bio)awardLocalGrowth(userId,'profile_completed',userId,10);return structuredClone(profile);
+}
+export function saveLocalAvatar(userId:string,avatarUrl:string|null,fallbackNickname?:string|null){const current=localProfiles()[userId]??defaultLocalProfile(userId,fallbackNickname);const profile={...current,avatarUrl:avatarUrl||undefined,updatedAt:now()};localProfiles()[userId]=profile;return structuredClone(profile)}
+export function getLocalGrowth(userId:string){const account=localGrowthAccounts()[userId]??{userId,points:0,level:1 as const,nextLevelPoints:100};return{account:structuredClone(account),entries:structuredClone(localGrowthLedger()[userId]??[])}}
+export function getLocalInbox(userId:string,cursor='0',limit=20):InboxPage{const data=store();const readIds=new Set(localInboxReads()[userId]??[]);const reviews=[...data.reviews].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));const offset=Math.max(0,Number.parseInt(cursor,10)||0);const safeLimit=Math.max(1,Math.min(50,limit));const page=reviews.slice(offset,offset+safeLimit);return{items:page.map(review=>({review:normalizeReview(review as unknown as Record<string,unknown>),requestName:data.requests.find(request=>request.id===review.request_id)?.name||'已归档心愿',isRead:readIds.has(review.id)})),nextCursor:offset+safeLimit<reviews.length?String(offset+safeLimit):null,unreadCount:reviews.filter(review=>!readIds.has(review.id)).length}}
+export function markLocalInboxRead(userId:string,reviewIds:string[]){const allowed=new Set(store().reviews.map(review=>review.id));const merged=[...new Set([...(localInboxReads()[userId]??[]),...reviewIds.filter(id=>allowed.has(id))])].slice(-1000);localInboxReads()[userId]=merged;return{ok:true,readReviewIds:merged}}
+
 export function isLocalPreview(request:Request) {
   // When Next.js listens on 0.0.0.0 it may normalize request.url to the
   // listening address. The Host header still contains the address the phone
@@ -73,6 +105,10 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
   if (body.action === 'reset_preview') {
     globalThis.__worthBloomLocalStore = seed();
     globalThis.__worthBloomDeviceEvents = new Set<string>();
+    globalThis.__worthBloomLocalProfiles = {};
+    globalThis.__worthBloomLocalGrowthAccounts = {};
+    globalThis.__worthBloomLocalGrowthLedger = {};
+    globalThis.__worthBloomLocalInboxReads = {};
     return { ok:true };
   }
   const data = store();
@@ -171,6 +207,7 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     request.status=decision==='BUY_NOW'?'PURCHASED':decision==='SAVE_FIRST'?'SAVING':'ARCHIVED'; if(body.note)request.decision_note=String(body.note).trim().slice(0,2000); data.invites.filter(item=>item.request_id===request.id&&!item.used_at).forEach(item=>item.revoked=1);
     if(decision==='SAVE_FIRST'&&!data.savingGoals.some(item=>item.request_id===request.id))data.savingGoals.unshift({id:`saving-${request.id}`,request_id:request.id,name:request.name,target:request.price,current:0,weekly_plan:null,created_at:now()});
     if(decision==='BUY_NOW'&&!data.assets.some(item=>item.id===`asset-${request.id}`)){const cat=request.category??'';data.assets.unshift({id:`asset-${request.id}`,name:request.name,type:requestType(cat),purchase_price:request.price,total_units:request.total_units ?? null,used_units:0,current_balance:requestType(cat)==='STORED_VALUE'?request.price:null,expiry_date:request.expiry_date ?? null,usage_count:0,last_used_at:null,bloom_until:new Date(Date.now()+20_000).toISOString()});}
+    if(request.decision_note)awardLocalGrowth('owner-preview','decision_with_reason',request.id,20);
     return {ok:true,target:decision==='BUY_NOW'?'assets':decision==='SAVE_FIRST'?'saving':'wishes'};
   }
   throw new LocalStoreError('不支持的操作');
@@ -197,11 +234,11 @@ export function claimLocalReview(reviewId: string, claimToken: string, userId: s
   if (!digest || digest !== claimToken) throw new LocalStoreError('认领凭据无效', 410, 'CLAIM_EXPIRED');
   if (review.claimedBy) {
     if (review.claimedBy !== userId) throw new LocalStoreError('认领凭据已经使用', 410, 'CLAIM_ALREADY_USED');
-    return { claimed: true, pointsAwarded: 10, dailyLimitReached: false, growthAccount: { userId, points: 10, level: 1 } };
+    const growth=getLocalGrowth(userId);return { claimed: true, pointsAwarded: growth.entries.find(entry=>entry.idempotencyKey===`review_claim:${reviewId}`)?.delta??0, dailyLimitReached: false, growthAccount: growth.account };
   }
   review.claimedBy = userId;
   review.claimedAt = now();
-  return { claimed: true, pointsAwarded: 10, dailyLimitReached: false, growthAccount: { userId, points: 10, level: 1 } };
+  awardLocalGrowth(userId,'review_claim',reviewId,10);return { claimed: true, pointsAwarded: 10, dailyLimitReached: false, growthAccount: getLocalGrowth(userId).account };
 }
 
 export function getLocalReview(tokenValue:string) {

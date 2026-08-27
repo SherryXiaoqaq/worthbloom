@@ -225,6 +225,19 @@ export interface ProfileSummary {
   device:{bound:boolean;focusRequestId?:string};
 }
 
+export interface InboxItem {
+  review:Review;
+  requestName:string;
+  isRead:boolean;
+  readAt?:string;
+}
+
+export interface InboxPage {
+  items:InboxItem[];
+  nextCursor:string|null;
+  unreadCount:number;
+}
+
 // API error (spec §9)
 export interface ApiError { error:string; code:string; field?:string; retryable?:boolean; }
 

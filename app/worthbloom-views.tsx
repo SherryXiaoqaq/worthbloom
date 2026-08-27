@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useMemo, useRef, useState } from 'react';
-import type { AppData, Decision, DeviceState, PurchaseRequest, Review, ReviewChoice, SavingGoal, UserProfile } from '@/lib/types';
+import type { AppData, Decision, DeviceState, GrowthAccount, GrowthLedgerEntry, InboxItem, PurchaseRequest, Review, ReviewChoice, SavingGoal, UserProfile } from '@/lib/types';
 import { typeToCategory } from '@/lib/wish-compat';
 import { AgentPanel } from './agent-panel';
 import styles from './worthbloom-v2.module.css';
@@ -83,11 +83,11 @@ function DecisionCard({request,decision,goal,onOpen}:{request:PurchaseRequest;de
   return <article className={styles.decisionCard}><button onClick={onOpen} className={styles.decisionMain}>{imageFor(request)?<img className={styles.decisionImage} src={imageFor(request)} alt=""/>:<span className={`${styles.decisionImage} ${styles.decisionImageFallback}`}>{categoryGlyph(request.category??'')}</span>}<span><small className={cls}>{decisionCopy(decision.decision)}</small><h3>{request.name}</h3><p>{new Date(decision.decided_at).toLocaleDateString('zh-CN')} · ¥{request.price.toLocaleString()}</p>{goal&&<><div className={styles.progress}><i style={{width:`${Math.min(100,goal.current/goal.target*100)}%`}}/></div><em>已准备 ¥{goal.current.toLocaleString()} / ¥{goal.target.toLocaleString()}</em></>}</span><Icon name="chevron" size={18}/></button></article>;
 }
 
-export function GardenView({data,unreadReviews,onNavigate,onOpen,onInvite}:{data:AppData;unreadReviews:Review[];onNavigate:(view:View)=>void;onOpen:(request:PurchaseRequest)=>void;onInvite:(request:PurchaseRequest)=>void}){
+export function GardenView({data,unreadReviews,unreadCount,onNavigate,onOpen,onInvite}:{data:AppData;unreadReviews:Review[];unreadCount:number;onNavigate:(view:View)=>void;onOpen:(request:PurchaseRequest)=>void;onInvite:(request:PurchaseRequest)=>void}){
   const track=useRef<HTMLDivElement>(null);
   const active=useMemo(()=>data.requests.filter(item=>item.status==='REVIEWING').sort((a,b)=>((b.review_count??0)-(a.review_count??0))||Date.parse(b.created_at??'')-Date.parse(a.created_at??'')).slice(0,5),[data.requests]);
   const decided=useMemo(()=>[...data.decisions].sort((a,b)=>Date.parse(b.decided_at)-Date.parse(a.decided_at)).slice(0,3),[data.decisions]);
-  const inbox=unreadReviews.length;
+  const inbox=unreadCount;
   const latestReply=[...unreadReviews].sort((a,b)=>Date.parse(b.created_at??'')-Date.parse(a.created_at??''))[0];
   const replyRequest=latestReply&&data.requests.find(request=>request.id===latestReply.request_id);
   const device=deriveDeviceSummary(data);
@@ -124,7 +124,7 @@ async function cropAvatar(source:string,zoom:number,x:number,y:number){
   return canvas.toDataURL('image/jpeg',.86);
 }
 
-export function ProfileView({data,profile,unreadCount,onProfileChange,onNavigate,onOpen}:{data:AppData;profile:UserProfile;unreadCount:number;onProfileChange:(profile:UserProfile)=>void;onNavigate:(view:View)=>void;onOpen:(request:PurchaseRequest)=>void}){
+export function ProfileView({data,profile,growthAccount,growthEntries,unreadCount,onProfileChange,onAvatarChange,onNavigate,onOpen}:{data:AppData;profile:UserProfile;growthAccount:GrowthAccount;growthEntries:GrowthLedgerEntry[];unreadCount:number;onProfileChange:(profile:UserProfile)=>Promise<void>;onAvatarChange:(avatarDataUrl:string|null)=>Promise<void>;onNavigate:(view:View)=>void;onOpen:(request:PurchaseRequest)=>void}){
   const [panel,setPanel]=useState<'NONE'|'SETTINGS'|'EDIT'|'AVATAR'|'PRIVACY'|'GROWTH'>('NONE');
   const [nickname,setNickname]=useState(profile.nickname);
   const [bio,setBio]=useState(profile.bio||'');
@@ -134,12 +134,13 @@ export function ProfileView({data,profile,unreadCount,onProfileChange,onNavigate
   const [avatarY,setAvatarY]=useState(50);
   const [avatarError,setAvatarError]=useState('');
   const [avatarBusy,setAvatarBusy]=useState(false);
+  const [profileBusy,setProfileBusy]=useState(false);
+  const [profileError,setProfileError]=useState('');
   const fileRef=useRef<HTMLInputElement>(null);
-  const decisionsWithReason=data.decisions.filter(decision=>Boolean(data.requests.find(item=>item.id===decision.request_id)?.decision_note)).length;
-  const points=(profile.nickname.trim()?10:0)+(decisionsWithReason*20);
+  const points=growthAccount.points;
   const growth=growthLevel(points);
   const progress=growth.next==null?100:Math.max(0,Math.min(100,((points-growth.floor)/(growth.next-growth.floor))*100));
-  const growthEntries=[...(profile.nickname.trim()?[{id:'profile',title:'完善个人资料',date:profile.updatedAt,points:10}]:[]),...data.decisions.flatMap(decision=>{const request=data.requests.find(item=>item.id===decision.request_id);return request?.decision_note?[{id:`decision-${decision.request_id}`,title:`完成「${request.name}」的清楚决定`,date:decision.decided_at,points:20}]:[]})].sort((a,b)=>Date.parse(b.date)-Date.parse(a.date));
+  const displayGrowthEntries=growthEntries.map(entry=>{const request=data.requests.find(item=>item.id===entry.referenceId);const title=entry.actionType==='profile_completed'?'完善个人资料':entry.actionType==='decision_with_reason'?`完成「${request?.name||'心愿'}」的清楚决定`:entry.actionType==='review_claim'?'提供一份有效朋友回信':entry.actionType;return{id:entry.id,title,date:entry.createdAt,points:entry.delta,limited:entry.limited}});
   const ready=data.requests.find(request=>request.status==='REVIEWING'&&data.reviews.some(review=>review.request_id===request.id));
   const latestDecision=[...data.decisions].sort((a,b)=>Date.parse(b.decided_at)-Date.parse(a.decided_at))[0];
   const tasks:Array<{id:string;eyebrow:string;title:string;action:()=>void}>=[];
@@ -159,9 +160,10 @@ export function ProfileView({data,profile,unreadCount,onProfileChange,onNavigate
     if(file.size>5*1024*1024){setAvatarError('头像不能超过 5MB');return}
     const reader=new FileReader();reader.onload=()=>{setAvatarSource(String(reader.result||''));setAvatarZoom(1);setAvatarX(50);setAvatarY(50);setAvatarError('');setPanel('AVATAR')};reader.onerror=()=>setAvatarError('图片读取失败，请重试');reader.readAsDataURL(file);
   }
-  async function saveAvatar(){setAvatarBusy(true);setAvatarError('');try{const avatarUrl=await cropAvatar(avatarSource,avatarZoom,avatarX,avatarY);onProfileChange({...profile,avatarUrl});setPanel('NONE')}catch(error){setAvatarError(error instanceof Error?error.message:'头像处理失败')}finally{setAvatarBusy(false)}}
-  function saveProfile(event:FormEvent){event.preventDefault();const name=nickname.trim();if(!name)return;onProfileChange({...profile,nickname:name.slice(0,20),bio:bio.trim().slice(0,80)});setPanel('NONE')}
-  function removeAvatar(){if(!profile.avatarUrl||!confirm('移除当前头像并恢复默认占位图？'))return;onProfileChange({...profile,avatarUrl:undefined});setPanel('NONE')}
+  async function saveAvatar(){setAvatarBusy(true);setAvatarError('');try{const avatarUrl=await cropAvatar(avatarSource,avatarZoom,avatarX,avatarY);await onAvatarChange(avatarUrl);setPanel('NONE')}catch(error){setAvatarError(error instanceof Error?error.message:'头像处理失败')}finally{setAvatarBusy(false)}}
+  async function saveProfile(event:FormEvent){event.preventDefault();const name=nickname.trim();if(!name)return;setProfileBusy(true);setProfileError('');try{await onProfileChange({...profile,nickname:name.slice(0,20),bio:bio.trim().slice(0,80)});setPanel('NONE')}catch(error){setProfileError(error instanceof Error?error.message:'资料保存失败')}finally{setProfileBusy(false)}}
+  async function removeAvatar(){if(!profile.avatarUrl||!confirm('移除当前头像并恢复默认占位图？'))return;setProfileBusy(true);setProfileError('');try{await onAvatarChange(null);setPanel('NONE')}catch(error){setProfileError(error instanceof Error?error.message:'头像移除失败')}finally{setProfileBusy(false)}}
+  async function savePrivacy(value:UserProfile['shareIdentityDefault']){setProfileBusy(true);setProfileError('');try{await onProfileChange({...profile,shareIdentityDefault:value})}catch(error){setProfileError(error instanceof Error?error.message:'隐私设置保存失败')}finally{setProfileBusy(false)}}
   return <section className={`${styles.rootPage} ${styles.profilePage}`}>
     <header className={styles.profileHeader}>
       <div className={styles.profileActions}><button onClick={()=>onNavigate('inbox')} aria-label={`朋友回信${unreadCount?`，${unreadCount}封未读`:''}`}><Icon name="bell"/>{unreadCount>0&&<i>{unreadCount}</i>}</button><button onClick={()=>setPanel('SETTINGS')} aria-label="设置"><Icon name="settings"/></button></div>
@@ -186,10 +188,10 @@ export function ProfileView({data,profile,unreadCount,onProfileChange,onNavigate
 
     {panel!=='NONE'&&<div className={styles.profileOverlay} role="presentation" onMouseDown={event=>{if(event.currentTarget===event.target)setPanel('NONE')}}><section className={styles.profileSheet} role="dialog" aria-modal="true" aria-label={panel==='AVATAR'?'裁剪头像':panel==='EDIT'?'编辑资料':panel==='PRIVACY'?'隐私与分享':panel==='GROWTH'?'好好值明细':'设置'}><header><b>{panel==='AVATAR'?'调整头像':panel==='EDIT'?'编辑资料':panel==='PRIVACY'?'隐私与分享':panel==='GROWTH'?'好好值明细':'设置'}</b><button onClick={()=>setPanel('NONE')} aria-label="关闭"><Icon name="close"/></button></header>
       {panel==='SETTINGS'&&<div className={styles.profileSettingsList}><button onClick={()=>{setNickname(profile.nickname);setBio(profile.bio||'');setPanel('EDIT')}}><Icon name="edit"/><span><b>账户与资料</b><small>昵称、头像和个人简介</small></span><Icon name="chevron"/></button><button onClick={()=>setPanel('PRIVACY')}><Icon name="shield"/><span><b>隐私与分享</b><small>设置分享时的默认身份</small></span><Icon name="chevron"/></button><button onClick={()=>onNavigate('device')}><Icon name="device"/><span><b>电子花设备</b><small>查看当前承载状态</small></span><Icon name="chevron"/></button><article><Icon name="help"/><span><b>关于好好花</b><small>朋友和 AI 提供视角，最终决定始终属于你。</small></span></article></div>}
-      {panel==='EDIT'&&<form className={styles.profileEditForm} onSubmit={saveProfile}><label><span>昵称</span><input required maxLength={20} value={nickname} onChange={event=>setNickname(event.target.value)} placeholder="怎么称呼你"/></label><label><span>个人简介</span><textarea maxLength={80} value={bio} onChange={event=>setBio(event.target.value)} placeholder="写下一句留给未来自己的话"/></label><button type="button" className={styles.profileSecondaryAction} onClick={()=>fileRef.current?.click()}><Icon name="camera"/>更换头像</button>{profile.avatarUrl&&<button type="button" className={styles.profileDangerAction} onClick={removeAvatar}>移除头像</button>}<button className={styles.profilePrimaryAction}>保存资料</button></form>}
+      {panel==='EDIT'&&<form className={styles.profileEditForm} onSubmit={saveProfile}><label><span>昵称</span><input required maxLength={20} value={nickname} onChange={event=>setNickname(event.target.value)} placeholder="怎么称呼你"/></label><label><span>个人简介</span><textarea maxLength={80} value={bio} onChange={event=>setBio(event.target.value)} placeholder="写下一句留给未来自己的话"/></label><button type="button" className={styles.profileSecondaryAction} onClick={()=>fileRef.current?.click()}><Icon name="camera"/>更换头像</button>{profile.avatarUrl&&<button type="button" className={styles.profileDangerAction} disabled={profileBusy} onClick={()=>void removeAvatar()}>移除头像</button>}{profileError&&<p className={styles.profileInlineError}>{profileError}</p>}<button className={styles.profilePrimaryAction} disabled={profileBusy}>{profileBusy?'保存中…':'保存资料'}</button></form>}
       {panel==='AVATAR'&&<div className={styles.avatarEditor}><div className={styles.avatarCrop}><img src={avatarSource} alt="头像裁剪预览" style={{transform:`scale(${avatarZoom})`,transformOrigin:`${avatarX}% ${avatarY}%`}}/></div><label>缩放<input type="range" min="1" max="2" step=".05" value={avatarZoom} onChange={event=>setAvatarZoom(Number(event.target.value))}/></label><label>水平位置<input type="range" min="0" max="100" value={avatarX} onChange={event=>setAvatarX(Number(event.target.value))}/></label><label>垂直位置<input type="range" min="0" max="100" value={avatarY} onChange={event=>setAvatarY(Number(event.target.value))}/></label>{avatarError&&<p className={styles.profileInlineError}>{avatarError}</p>}<button className={styles.profilePrimaryAction} disabled={avatarBusy} onClick={()=>void saveAvatar()}>{avatarBusy?'处理中…':'使用这张头像'}</button></div>}
-      {panel==='PRIVACY'&&<div className={styles.profilePrivacy}><p>头像默认只保存在当前账户页面。分享心愿时，是否展示身份由你决定。</p><div><button className={profile.shareIdentityDefault==='ANONYMOUS'?styles.profileChoiceActive:''} onClick={()=>onProfileChange({...profile,shareIdentityDefault:'ANONYMOUS'})}><b>默认匿名</b><small>Reviewer 只看到匿名称呼</small></button><button className={profile.shareIdentityDefault==='NICKNAME'?styles.profileChoiceActive:''} onClick={()=>onProfileChange({...profile,shareIdentityDefault:'NICKNAME'})}><b>展示昵称</b><small>仅展示昵称，不自动公开头像</small></button></div><article><b>好好值奖励什么？</b><p>完成有理由的决定、提供有效反馈和补充真实结果。购买金额、邀请人数、连续登录和多数赞同都不会加分。</p></article></div>}
-      {panel==='GROWTH'&&<div className={styles.growthLedger}><section><small>LV.{growth.level} · {growth.name}</small><b>{points}<em> 好好值</em></b><div className={styles.growthProgress}><i style={{width:`${progress}%`}}/></div><p>{growth.next?`再获得 ${growth.next-points} 好好值进入下一级`:'当前已达到最高等级'}</p></section><p>好好值只奖励真实贡献，不按消费金额、邀请人数或多数意见加分。</p><div>{growthEntries.map(entry=><article key={entry.id}><span><b>{entry.title}</b><small>{new Date(entry.date).toLocaleDateString('zh-CN')}</small></span><strong>+{entry.points}</strong></article>)}</div></div>}
+      {panel==='PRIVACY'&&<div className={styles.profilePrivacy}><p>头像会保存在你的账户资料中。分享心愿时，是否展示身份由你决定。</p><div><button disabled={profileBusy} className={profile.shareIdentityDefault==='ANONYMOUS'?styles.profileChoiceActive:''} onClick={()=>void savePrivacy('ANONYMOUS')}><b>默认匿名</b><small>Reviewer 只看到匿名称呼</small></button><button disabled={profileBusy} className={profile.shareIdentityDefault==='NICKNAME'?styles.profileChoiceActive:''} onClick={()=>void savePrivacy('NICKNAME')}><b>展示昵称</b><small>仅展示昵称，不自动公开头像</small></button></div>{profileError&&<p className={styles.profileInlineError}>{profileError}</p>}<article><b>好好值奖励什么？</b><p>完成有理由的决定、提供有效反馈和补充真实结果。购买金额、邀请人数、连续登录和多数赞同都不会加分。</p></article></div>}
+      {panel==='GROWTH'&&<div className={styles.growthLedger}><section><small>LV.{growth.level} · {growth.name}</small><b>{points}<em> 好好值</em></b><div className={styles.growthProgress}><i style={{width:`${progress}%`}}/></div><p>{growth.next?`再获得 ${growth.next-points} 好好值进入下一级`:'当前已达到最高等级'}</p></section><p>好好值只奖励真实贡献，不按消费金额、邀请人数或多数意见加分。</p><div>{displayGrowthEntries.map(entry=><article key={entry.id}><span><b>{entry.title}</b><small>{new Date(entry.date).toLocaleDateString('zh-CN')}{entry.limited?' · 已达当日上限':''}</small></span><strong>{entry.points>0?'+':''}{entry.points}</strong></article>)}</div>{!displayGrowthEntries.length&&<p className={styles.emptyState}>还没有成长记录。</p>}</div>}
     </section></div>}
   </section>;
 }
@@ -212,9 +214,12 @@ export function SavingsView({data,onBack,onAddSaving}:{data:AppData;onBack:()=>v
   return <section className={styles.subPage}><PageHeader title="存钱目标" onBack={onBack}/><section className={styles.savingsSummary}><small>SAVING GOALS</small><b>¥{saved.toLocaleString()}<em> / ¥{total.toLocaleString()}</em></b><p>{data.savingGoals.length?`${data.savingGoals.length} 个目标正在慢慢靠近`:'当前没有进行中的存钱目标'}</p></section><div className={styles.savingsList}>{data.savingGoals.map(goal=><article key={goal.id}><SavingControl goal={goal} onAdd={amount=>onAddSaving(goal.id,amount)}/></article>)}</div>{!data.savingGoals.length&&<p className={styles.emptyState}>当你选择“先存钱”，对应目标会出现在这里。</p>}</section>;
 }
 
-export function InboxView({data,onBack,onOpen}:{data:AppData;onBack:()=>void;onOpen:(request:PurchaseRequest)=>void}){
-  const sorted=[...data.reviews].sort((a,b)=>Date.parse(b.created_at??'')-Date.parse(a.created_at??''));
-  return <section className={styles.subPage}><PageHeader title="朋友回信" onBack={onBack}/><p className={styles.pageLead}>按时间查看收到的真实视角。回信只提供参考，决定仍然属于你。</p><div className={styles.inboxList}>{sorted.map(review=>{const request=data.requests.find(item=>item.id===review.request_id);return <button key={review.id} disabled={!request} onClick={()=>request&&onOpen(request)}><span className={styles.replyAvatar}>{review.reviewer_name.slice(0,1)}</span><span><small>{review.reviewer_name} · {new Date(review.created_at??'').toLocaleDateString('zh-CN')}</small><b>{request?.name||'已归档心愿'}</b><p>{review.comment}</p></span><Icon name="chevron"/></button>})}</div>{!sorted.length&&<p className={styles.emptyState}>还没有收到朋友回信。</p>}</section>;
+export function InboxView({data,items,nextCursor,onLoadMore,onBack,onOpen}:{data:AppData;items:InboxItem[];nextCursor:string|null;onLoadMore:()=>Promise<unknown>;onBack:()=>void;onOpen:(request:PurchaseRequest)=>void}){
+  const [loading,setLoading]=useState(false);
+  const fallback=[...data.reviews].sort((a,b)=>Date.parse(b.created_at??'')-Date.parse(a.created_at??'')).map(review=>({review,requestName:data.requests.find(item=>item.id===review.request_id)?.name||'已归档心愿',isRead:true} as InboxItem));
+  const visible=items.length?items:fallback;
+  async function loadMore(){setLoading(true);try{await onLoadMore()}finally{setLoading(false)}}
+  return <section className={styles.subPage}><PageHeader title="朋友回信" onBack={onBack}/><p className={styles.pageLead}>按时间查看收到的真实视角。回信只提供参考，决定仍然属于你。</p><div className={styles.inboxList}>{visible.map(item=>{const review=item.review;const request=data.requests.find(entry=>entry.id===review.request_id);return <button key={review.id} disabled={!request} onClick={()=>request&&onOpen(request)}><span className={styles.replyAvatar}>{review.reviewer_name.slice(0,1)}</span><span><small>{!item.isRead?'未读 · ':''}{review.reviewer_name} · {new Date(review.created_at??'').toLocaleDateString('zh-CN')}</small><b>{item.requestName}</b><p>{review.comment}</p></span><Icon name="chevron"/></button>})}</div>{!visible.length&&<p className={styles.emptyState}>还没有收到朋友回信。</p>}{nextCursor&&<button className={styles.headingLink} disabled={loading} onClick={()=>void loadMore()}>{loading?'加载中…':'加载更多回信'}</button>}</section>;
 }
 
 export function DeviceView({data,onBack}:{data:AppData;onBack:()=>void}){

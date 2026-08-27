@@ -1,6 +1,6 @@
 import 'server-only';
 
-import type { AppData, Asset, Decision, PurchaseRequest, Review, ReviewChoice, ReviewInvite, SavingGoal } from '@/lib/types';
+import type { AppData, Asset, Decision, GrowthAccount, GrowthLedgerEntry, InboxPage, PurchaseRequest, Review, ReviewChoice, ReviewInvite, SavingGoal, UserProfile } from '@/lib/types';
 import { applyAssetUsage, AssetRuleError, parseAssetPayload } from '@/lib/asset-rules';
 import { getCloudBaseDb } from './cloudbase-http-db';
 import { normalizeWish, normalizeReview, buildReviewContext } from '@/lib/wish-compat';
@@ -24,6 +24,8 @@ const collections = {
   agentSessions: 'agent_sessions',
   agentMessages: 'agent_messages',
   agentReports: 'agent_reports',
+  profiles: 'user_profiles',
+  inboxStates: 'inbox_states',
 } as const;
 const WISH_TYPES=['COURSE_TRAINING','DURABLE_GOOD','SINGLE_USE','MEMBERSHIP','EXPERIENCE','OTHER'] as const;
 
@@ -72,6 +74,150 @@ async function ownedDocument(collection: string, documentId: string, ownerId: st
 
 async function saveDocument(collection: string, id: string, data: Record<string, unknown>) {
   await getCloudBaseDb().collection(collection).doc(id).set({ ...data, id });
+}
+
+function levelForPoints(points: number): 1 | 2 | 3 | 4 {
+  if (points >= 700) return 4;
+  if (points >= 300) return 3;
+  if (points >= 100) return 2;
+  return 1;
+}
+
+function nextLevelPoints(level: 1 | 2 | 3 | 4) {
+  return level === 1 ? 100 : level === 2 ? 300 : level === 3 ? 700 : undefined;
+}
+
+function profileFromDocument(ownerId: string, document: CloudDocument | undefined, fallbackNickname?: string | null): UserProfile {
+  const createdAt = String(document?.created_at || now());
+  return {
+    userId: ownerId,
+    nickname: String(document?.nickname || fallbackNickname || '好好花用户').slice(0, 20),
+    avatarUrl: document?.avatar_url ? String(document.avatar_url) : undefined,
+    bio: document?.bio ? String(document.bio) : '',
+    shareIdentityDefault: document?.share_identity_default === 'NICKNAME' ? 'NICKNAME' : 'ANONYMOUS',
+    createdAt,
+    updatedAt: String(document?.updated_at || createdAt),
+  };
+}
+
+async function awardCloudBaseGrowth(ownerId: string, actionType: string, referenceId: string, delta: number) {
+  const db = getCloudBaseDb();
+  const idempotencyKey = `${actionType}:${referenceId}`;
+  const entries = await ownerDocuments(collections.growthLedger, ownerId);
+  if (entries.some(entry => entry.idempotency_key === idempotencyKey)) return;
+  const accountDocument = (await db.collection(collections.growth).doc(ownerId).get()).data?.[0] as CloudDocument | undefined;
+  const points = Number(accountDocument?.points ?? 0) + delta;
+  const level = levelForPoints(points);
+  await saveDocument(collections.growth, ownerId, { owner_id: ownerId, user_id: ownerId, points, level, updated_at: now() });
+  await saveDocument(collections.growthLedger, crypto.randomUUID(), {
+    owner_id: ownerId,
+    user_id: ownerId,
+    action_type: actionType,
+    reference_id: referenceId,
+    points: delta,
+    idempotency_key: idempotencyKey,
+    limited: false,
+    created_at: now(),
+  });
+}
+
+export async function loadCloudBaseProfile(ownerId: string, fallbackNickname?: string | null) {
+  const document = (await getCloudBaseDb().collection(collections.profiles).doc(ownerId).get()).data?.[0] as CloudDocument | undefined;
+  return profileFromDocument(ownerId, document, fallbackNickname);
+}
+
+export async function saveCloudBaseProfile(ownerId: string, patch: Partial<UserProfile>, fallbackNickname?: string | null) {
+  const existing = (await getCloudBaseDb().collection(collections.profiles).doc(ownerId).get()).data?.[0] as CloudDocument | undefined;
+  const current = profileFromDocument(ownerId, existing, fallbackNickname);
+  const nickname = patch.nickname === undefined ? current.nickname : String(patch.nickname).trim().slice(0, 20);
+  const bio = patch.bio === undefined ? current.bio || '' : String(patch.bio).trim().slice(0, 80);
+  const shareIdentityDefault = patch.shareIdentityDefault === undefined ? current.shareIdentityDefault : patch.shareIdentityDefault;
+  if (!nickname) throw new CloudBaseStoreError('请填写昵称', 400, 'nickname');
+  if (!['ANONYMOUS', 'NICKNAME'].includes(shareIdentityDefault)) throw new CloudBaseStoreError('分享身份设置无效', 400, 'shareIdentityDefault');
+  const createdAt = current.createdAt;
+  const updatedAt = now();
+  await saveDocument(collections.profiles, ownerId, {
+    owner_id: ownerId,
+    user_id: ownerId,
+    nickname,
+    avatar_url: current.avatarUrl || null,
+    bio,
+    share_identity_default: shareIdentityDefault,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  });
+  if (nickname && bio) await awardCloudBaseGrowth(ownerId, 'profile_completed', ownerId, 10);
+  return { ...current, nickname, bio, shareIdentityDefault, updatedAt };
+}
+
+export async function saveCloudBaseAvatar(ownerId: string, avatarUrl: string | null, fallbackNickname?: string | null) {
+  const existing = (await getCloudBaseDb().collection(collections.profiles).doc(ownerId).get()).data?.[0] as CloudDocument | undefined;
+  const current = profileFromDocument(ownerId, existing, fallbackNickname);
+  const updatedAt = now();
+  await saveDocument(collections.profiles, ownerId, {
+    owner_id: ownerId,
+    user_id: ownerId,
+    nickname: current.nickname,
+    avatar_url: avatarUrl,
+    bio: current.bio || '',
+    share_identity_default: current.shareIdentityDefault,
+    created_at: current.createdAt,
+    updated_at: updatedAt,
+  });
+  return { ...current, avatarUrl: avatarUrl || undefined, updatedAt };
+}
+
+export async function loadCloudBaseGrowth(ownerId: string) {
+  const [accountDocument, ledgerDocuments] = await Promise.all([
+    getCloudBaseDb().collection(collections.growth).doc(ownerId).get(),
+    getCloudBaseDb().collection(collections.growthLedger).where({ user_id: ownerId }).limit(100).get(),
+  ]);
+  const rawAccount = accountDocument.data?.[0] as CloudDocument | undefined;
+  const points = Number(rawAccount?.points ?? 0);
+  const level = levelForPoints(points);
+  const account: GrowthAccount = { userId: ownerId, points, level, nextLevelPoints: nextLevelPoints(level), updatedAt: rawAccount?.updated_at ? String(rawAccount.updated_at) : undefined };
+  const entries: GrowthLedgerEntry[] = newestFirst((ledgerDocuments.data || []) as CloudDocument[]).map(document => ({
+    id: String(document.id || document._id || ''),
+    userId: ownerId,
+    actionType: String(document.action_type || document.reason || 'growth'),
+    referenceId: String(document.reference_id || ''),
+    delta: Number(document.points ?? 0),
+    idempotencyKey: String(document.idempotency_key || ''),
+    limited: Boolean(document.limited),
+    createdAt: String(document.created_at || now()),
+  }));
+  return { account, entries };
+}
+
+export async function loadCloudBaseInbox(ownerId: string, cursor = '0', limit = 20): Promise<InboxPage> {
+  const [reviewDocuments, requestDocuments, stateDocument] = await Promise.all([
+    ownerDocuments(collections.reviews, ownerId),
+    ownerDocuments(collections.requests, ownerId),
+    getCloudBaseDb().collection(collections.inboxStates).doc(ownerId).get(),
+  ]);
+  const readState = stateDocument.data?.[0] as CloudDocument | undefined;
+  const readIds = new Set(Array.isArray(readState?.read_review_ids) ? readState.read_review_ids.map(String) : []);
+  const requestNames = new Map(requestDocuments.map(document => [String(document.id || document._id || ''), String(document.name || '已归档心愿')]));
+  const reviews = newestFirst(reviewDocuments).map(document => normalizeReview(cleanDocument(document) as unknown as Record<string, unknown>));
+  const offset = Math.max(0, Number.parseInt(cursor, 10) || 0);
+  const safeLimit = Math.max(1, Math.min(50, limit));
+  const page = reviews.slice(offset, offset + safeLimit);
+  return {
+    items: page.map(review => ({ review, requestName: requestNames.get(review.request_id) || '已归档心愿', isRead: readIds.has(review.id) })),
+    nextCursor: offset + safeLimit < reviews.length ? String(offset + safeLimit) : null,
+    unreadCount: reviews.filter(review => !readIds.has(review.id)).length,
+  };
+}
+
+export async function markCloudBaseInboxRead(ownerId: string, reviewIds: string[]) {
+  const db = getCloudBaseDb();
+  const ownedReviews = await ownerDocuments(collections.reviews, ownerId);
+  const allowed = new Set(ownedReviews.map(document => String(document.id || document._id || '')));
+  const stateDocument = (await db.collection(collections.inboxStates).doc(ownerId).get()).data?.[0] as CloudDocument | undefined;
+  const existing = Array.isArray(stateDocument?.read_review_ids) ? stateDocument.read_review_ids.map(String) : [];
+  const merged = [...new Set([...existing, ...reviewIds.filter(id => allowed.has(id))])].slice(-1000);
+  await saveDocument(collections.inboxStates, ownerId, { owner_id: ownerId, user_id: ownerId, read_review_ids: merged, updated_at: now() });
+  return { ok: true, readReviewIds: merged };
 }
 
 export async function loadCloudBaseData(ownerId: string): Promise<AppData> {
@@ -324,6 +470,7 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     const status = decision === 'BUY_NOW' ? 'PURCHASED' : decision === 'SAVE_FIRST' ? 'SAVING' : 'ARCHIVED';
     await db.collection(collections.requests).doc(requestId).update(note ? { status, decision_note: note } : { status });
     await saveDocument(collections.decisions, `decision-${requestId}`, { owner_id: ownerId, request_id: requestId, decision, decided_at: now() });
+    if (note) await awardCloudBaseGrowth(ownerId, 'decision_with_reason', requestId, 20);
     const invites = (await ownerDocuments(collections.invites, ownerId)).filter(item => item.request_id === requestId && !item.used_at);
     await Promise.all(invites.map(invite => db.collection(collections.invites).doc(String(invite.id || invite._id)).update({ revoked: 1 })));
 

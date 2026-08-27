@@ -93,7 +93,9 @@ export async function POST(request: Request) {
       if (acctDoc) await db.collection('growth_accounts').doc(userId).update({ points: newPoints, level, updated_at: new Date().toISOString() });
       else await db.collection('growth_accounts').doc(userId).set({ user_id: userId, points: newPoints, level, updated_at: new Date().toISOString() });
       await db.collection('growth_ledger').doc(crypto.randomUUID()).set({
+        owner_id: userId,
         user_id: userId,
+        action_type: 'review_claim',
         points: pointsAwarded,
         limited: todayCount >= 3,
         idempotency_key: idempotencyKey,

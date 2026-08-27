@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AppData, PurchaseRequest, ReviewChoice, ReviewInvite, UserProfile } from '@/lib/types';
+import type { AppData, GrowthAccount, GrowthLedgerEntry, InboxItem, InboxPage, PurchaseRequest, ReviewChoice, ReviewInvite, UserProfile } from '@/lib/types';
 import { AUTH_USER_KEY, cloudBaseFetch } from '@/lib/cloudbase/client';
 import CreateWishSheet from './worthbloom-create';
 import { BottomNav, DecisionsView, DeviceView, GardenView, InboxView, ProfileView, SavingsView, View, WishesView, WishRoom } from './worthbloom-views';
@@ -38,6 +38,7 @@ function routeFromHash(hash:string):Pick<HistoryState,'view'|'requestId'>{
 async function json<T>(response:Response):Promise<T>{const data=await response.json() as T&{error?:string};if(!response.ok)throw new Error(data.error||'操作失败');return data}
 function normalizeData(data:AppData):AppData{return{...data,requests:data.requests||[],reviews:data.reviews||[],invites:data.invites||[],decisions:data.decisions||[],savingGoals:data.savingGoals||[],assets:data.assets||[]}}
 const defaultProfile:UserProfile={userId:'local-profile',nickname:'好好花用户',bio:'把每一次认真思考，留给未来的自己。',shareIdentityDefault:'ANONYMOUS',createdAt:'2026-08-26T00:00:00.000Z',updatedAt:'2026-08-26T00:00:00.000Z'};
+const defaultGrowth:GrowthAccount={userId:'local-profile',points:0,level:1,nextLevelPoints:100};
 function readProfile(){
   try{
     const authRaw=localStorage.getItem(AUTH_USER_KEY);
@@ -64,13 +65,21 @@ export default function WorthBloomMainClient(){
   const [decisionNote,setDecisionNote]=useState('');
   const [seenReviewIds,setSeenReviewIds]=useState<string[]>([]);
   const [profile,setProfile]=useState<UserProfile>(defaultProfile);
+  const [growthAccount,setGrowthAccount]=useState<GrowthAccount>(defaultGrowth);
+  const [growthEntries,setGrowthEntries]=useState<GrowthLedgerEntry[]>([]);
+  const [inboxItems,setInboxItems]=useState<InboxItem[]>([]);
+  const [inboxNextCursor,setInboxNextCursor]=useState<string|null>(null);
+  const [inboxUnreadCount,setInboxUnreadCount]=useState(0);
   const scrollRef=useRef<Record<string,number>>({});
   const active=useMemo(()=>data.requests.find(request=>request.id===activeId)||data.requests[0],[activeId,data.requests]);
 
   async function refresh(){try{const result=normalizeData(await json<AppData>(await cloudBaseFetch('/api/data',{cache:'no-store'})));setData(result);return result}catch{return data}}
   useEffect(()=>{let mounted=true;cloudBaseFetch('/api/data',{cache:'no-store'}).then(response=>json<AppData>(response)).then(result=>{if(mounted)setData(normalizeData(result))}).catch(()=>{});return()=>{mounted=false}},[]);
-  useEffect(()=>{let stored:string[]=[];try{stored=JSON.parse(localStorage.getItem('worthbloom_seen_reviews')||'[]') as string[]}catch{}const frame=requestAnimationFrame(()=>setSeenReviewIds(stored));return()=>cancelAnimationFrame(frame)},[]);
-  useEffect(()=>{const frame=requestAnimationFrame(()=>setProfile(readProfile()));return()=>cancelAnimationFrame(frame)},[]);
+  useEffect(()=>{let mounted=true;Promise.all([
+    cloudBaseFetch('/api/profile',{cache:'no-store'}).then(response=>json<{profile:UserProfile}>(response)),
+    cloudBaseFetch('/api/growth',{cache:'no-store'}).then(response=>json<{account:GrowthAccount;entries:GrowthLedgerEntry[]}>(response)),
+    cloudBaseFetch('/api/inbox?limit=20',{cache:'no-store'}).then(response=>json<InboxPage>(response)),
+  ]).then(([profileResult,growthResult,inboxResult])=>{if(!mounted)return;setProfile(profileResult.profile);writeProfile(profileResult.profile);setGrowthAccount(growthResult.account);setGrowthEntries(growthResult.entries);setInboxItems(inboxResult.items);setInboxNextCursor(inboxResult.nextCursor);setInboxUnreadCount(inboxResult.unreadCount);setSeenReviewIds(inboxResult.items.filter(item=>item.isRead).map(item=>item.review.id))}).catch(()=>{if(mounted)setProfile(readProfile())});return()=>{mounted=false}},[]);
   useEffect(()=>{
     const route=routeFromHash(location.hash);
     const initial:HistoryState={worthbloom:true,view:route.view,requestId:route.requestId,scrollY:0};
@@ -82,23 +91,26 @@ export default function WorthBloomMainClient(){
   function remember(){scrollRef.current[view]=window.scrollY;const state=history.state as HistoryState|null;if(state?.worthbloom)history.replaceState({...state,scrollY:window.scrollY},'',location.href)}
   function navigate(next:View,requestId?:string,replace=false){remember();const state:HistoryState={worthbloom:true,view:next,requestId,scrollY:0};(replace?history.replaceState:history.pushState).call(history,state,'',`#${next}${requestId?`/${requestId}`:''}`);setView(next);if(requestId)setActiveId(requestId);setMessage('');window.scrollTo({top:0,behavior:'auto'})}
   function root(next:'garden'|'profile'){navigate(next,undefined,true)}
-  function openInbox(){const ids=data.reviews.map(review=>review.id);setSeenReviewIds(ids);localStorage.setItem('worthbloom_seen_reviews',JSON.stringify(ids));navigate('inbox')}
+  async function loadInbox(reset=false){const cursor=reset?'0':inboxNextCursor;if(!reset&&!cursor)return null;const page=await json<InboxPage>(await cloudBaseFetch(`/api/inbox?limit=20&cursor=${encodeURIComponent(cursor||'0')}`,{cache:'no-store'}));setInboxItems(previous=>reset?page.items:[...previous,...page.items.filter(item=>!previous.some(existing=>existing.review.id===item.review.id))]);setInboxNextCursor(page.nextCursor);setInboxUnreadCount(page.unreadCount);setSeenReviewIds(previous=>[...new Set([...previous,...page.items.filter(item=>item.isRead).map(item=>item.review.id)])]);return page}
+  async function openInbox(){navigate('inbox');try{const page=await loadInbox(true);const unreadIds=page?.items.filter(item=>!item.isRead).map(item=>item.review.id)??[];if(unreadIds.length){await json(await cloudBaseFetch('/api/inbox',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({reviewIds:unreadIds})}));setInboxItems(previous=>previous.map(item=>unreadIds.includes(item.review.id)?{...item,isRead:true}:item));setInboxUnreadCount(previous=>Math.max(0,previous-unreadIds.length));setSeenReviewIds(previous=>[...new Set([...previous,...unreadIds])])}}catch{/* 数据仍可从 /api/data 展示 */}}
   function back(){const state=history.state as HistoryState|null;if(state?.worthbloom&&view!=='garden'&&view!=='profile')history.back();else root('garden')}
   function openRoom(request:PurchaseRequest){setDecisionNote(request.decision_note||'');navigate('room',request.id)}
   async function invite(request=active){if(!request)return;setBusy('invite');setMessage('');try{let invite=data.invites.find(item=>item.request_id===request.id&&!item.revoked&&!item.used_at);if(!invite){const output=await json<{invite:ReviewInvite}>(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'create_invite',requestId:request.id})}));invite=output.invite;setData(previous=>({...previous,invites:[...previous.invites,invite!]}))}const url=`${location.origin}/review/wish/${invite.token}`;await navigator.clipboard.writeText(url);setMessage('朋友邀请链接已复制，可以发到微信或其他群聊。');if(view!=='room')openRoom(request)}catch(error){setMessage(error instanceof Error?error.message:'邀请链接生成失败')}finally{setBusy('')}}
   async function decide(choice:ReviewChoice){if(!active)return;setBusy(choice);setMessage('');try{await json(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'decide',requestId:active.id,decision:choice,note:decisionNote})}));const result=await refresh();const updated=result.requests.find(item=>item.id===active.id);if(updated)setActiveId(updated.id);setMessage(choice==='BUY_NOW'?'决定已经保存：现在购买。':choice==='SAVE_FIRST'?'决定已经保存，并创建了存钱目标。':'决定已经保存：再等等也是一种清楚的选择。')}catch(error){setMessage(error instanceof Error?error.message:'决定没有保存')}finally{setBusy('')}}
   async function addSaving(goalId:string,amount:number){await json(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'add_saving',goalId,amount})}));await refresh()}
   function created(request:PurchaseRequest,invites:ReviewInvite[]){setData(previous=>{const exists=previous.requests.some(r=>r.id===request.id);return{...previous,requests:exists?previous.requests.map(r=>r.id===request.id?request:r):[request,...previous.requests],invites:[...previous.invites,...invites]}});setEditRequest(null);setDecisionNote('');navigate('room',request.id)}
-  function updateProfile(next:UserProfile){const saved={...next,updatedAt:new Date().toISOString()};setProfile(saved);writeProfile(saved)}
+  async function refreshGrowth(){const output=await json<{account:GrowthAccount;entries:GrowthLedgerEntry[]}>(await cloudBaseFetch('/api/growth',{cache:'no-store'}));setGrowthAccount(output.account);setGrowthEntries(output.entries)}
+  async function updateProfile(next:UserProfile){const output=await json<{profile:UserProfile}>(await cloudBaseFetch('/api/profile',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({nickname:next.nickname,bio:next.bio,shareIdentityDefault:next.shareIdentityDefault})}));setProfile(output.profile);writeProfile(output.profile);await refreshGrowth()}
+  async function updateAvatar(avatarDataUrl:string|null){const output=await json<{profile:UserProfile}>(await cloudBaseFetch('/api/profile/avatar',avatarDataUrl?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({avatarDataUrl})}:{method:'DELETE'}));setProfile(output.profile);writeProfile(output.profile)}
 
   const rootPage=view==='garden'||view==='profile';
-  const unreadReviews=data.reviews.filter(review=>!seenReviewIds.includes(review.id));
+  const unreadReviews=inboxItems.length?inboxItems.filter(item=>!item.isRead).map(item=>item.review):data.reviews.filter(review=>!seenReviewIds.includes(review.id));
   return <main className={styles.stage}><div className={styles.phone}>
-    {view==='garden'&&<GardenView data={data} unreadReviews={unreadReviews} onNavigate={next=>next==='inbox'?openInbox():navigate(next)} onOpen={openRoom} onInvite={request=>void invite(request)}/>}
-    {view==='profile'&&<ProfileView data={data} profile={profile} unreadCount={unreadReviews.length} onProfileChange={updateProfile} onNavigate={next=>next==='inbox'?openInbox():navigate(next)} onOpen={openRoom}/>}
+    {view==='garden'&&<GardenView data={data} unreadReviews={unreadReviews} unreadCount={inboxItems.length?inboxUnreadCount:unreadReviews.length} onNavigate={next=>next==='inbox'?openInbox():navigate(next)} onOpen={openRoom} onInvite={request=>void invite(request)}/>}
+    {view==='profile'&&<ProfileView data={data} profile={profile} growthAccount={growthAccount} growthEntries={growthEntries} unreadCount={inboxItems.length?inboxUnreadCount:unreadReviews.length} onProfileChange={updateProfile} onAvatarChange={updateAvatar} onNavigate={next=>next==='inbox'?void openInbox():navigate(next)} onOpen={openRoom}/>}
     {view==='wishes'&&<WishesView data={data} onBack={back} onOpen={openRoom}/>}
     {view==='decisions'&&<DecisionsView data={data} onBack={back} onOpen={openRoom}/>}
-    {view==='inbox'&&<InboxView data={data} onBack={back} onOpen={openRoom}/>}
+    {view==='inbox'&&<InboxView data={data} items={inboxItems} nextCursor={inboxNextCursor} onLoadMore={()=>loadInbox(false)} onBack={back} onOpen={openRoom}/>}
     {view==='device'&&<DeviceView data={data} onBack={back}/>}
     {view==='savings'&&<SavingsView data={data} onBack={back} onAddSaving={addSaving}/>}
     {view==='room'&&active&&<WishRoom key={active.id} data={data} request={active} busy={busy} message={message} onBack={back} onInvite={()=>void invite()} onDecide={choice=>void decide(choice)} onAddSaving={addSaving} onDecisionNote={setDecisionNote} onEdit={()=>{setEditRequest(active);setCreateOpen(true)}}/>}
