@@ -254,9 +254,9 @@
 @media(max-width:390px){.profilePage{padding-left:16px!important;padding-right:16px!important}.profileHeader{margin-left:-16px;margin-right:-16px;padding-left:16px;padding-right:16px}.growthCard{padding:17px}.growthTop>span b{font-size:25px}.growthTasks{gap:7px}.growthTasks button{padding:10px}.profileCoreGrid,.profileUtilityGrid{gap:9px}.profileCoreGrid>button{min-height:153px;padding:14px}.profileName h1{font-size:24px}}
 
 /* 决定时间线与存钱操作：统一为浅、中、深三档黄色 */
-.timeline .blueSurface{background:linear-gradient(135deg,#fffef8 0%,#fffceb 56%,#fff9dc 100%)}
-.timeline .pinkSurface{background:linear-gradient(135deg,#fffce6 0%,#fff7c8 56%,#fff3b2 100%)}
-.timeline .yellowSurface,.timeline .greenSurface{background:linear-gradient(135deg,#fff6a6 0%,#fff199 58%,#ffed82 100%)}
+.timeline .blueSurface{background:#fff9d6}
+.timeline .pinkSurface{background:#fff5bd}
+.timeline .yellowSurface,.timeline .greenSurface{background:#fff6a6}
 .savingControl{border-color:#f0e39a}
 .savingControl .largeProgress{background:#fffbe1}
 .savingControl .largeProgress i{background:linear-gradient(90deg,#fff6a6 0%,#ffed82 100%);box-shadow:0 0 12px rgba(230,179,40,.24)}
