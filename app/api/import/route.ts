@@ -3,7 +3,7 @@ import { AiAuthorizationError, authorizeAiRequest } from '@/lib/server/ai/author
 import { AiServiceError, generateJson, isAiConfigured } from '@/lib/server/ai/client';
 import { ProductSourceError, readProductPage } from '@/lib/server/ai/product-source';
 import { extractUrls } from '@/lib/url-extract';
-import { categoryToType } from '@/lib/wish-compat';
+import { canonicalWishType, typeToCategory } from '@/lib/wish-compat';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,22 +19,27 @@ function bytesToBase64(bytes: Uint8Array) {
 function fallbackSnapshot(raw: string, hint: string, isScreenshot: boolean): ProductSnapshot {
   const priceMatch = raw.match(/(?:¥|￥|价格[:：]?\s*)(\d+(?:\.\d{1,2})?)/);
   const name = raw.replace(/https?:\/\/\S+/g, '').replace(/[¥￥]\s*\d+(?:\.\d{1,2})?/g, '').replace(/复制|打开|链接|商品/g, ' ').trim().slice(0, 32) || (isScreenshot ? '截图中的新心愿' : '一个新的心愿');
-  return { name, price: priceMatch ? Number(priceMatch[1]) : null, brand: null, type: 'OTHER' as WishType, category: '其他', image_url: null, source_text: raw || hint, confidence: raw ? 0.58 : 0.25, needs_confirmation: true };
+  return { name, price: priceMatch ? Number(priceMatch[1]) : null, brand: null, type: 'OTHER' as WishType, category: '其他', image_url: null, source_text: raw || hint, totalUnits:null, usageFrequency:null, expiryDate:null, confidence: raw ? 0.58 : 0.25, needs_confirmation: true };
 }
 
 function mapAnalysis(raw: Record<string, unknown>): ProductSnapshot {
   const price = Number(raw.price);
   const confidence = Number(raw.confidence);
-  const category = typeof raw.category === 'string' && raw.category.trim() ? raw.category.trim() : '其他';
+  const rawCategory = typeof raw.category === 'string' && raw.category.trim() ? raw.category.trim() : '其他';
+  const type = canonicalWishType(raw.type, rawCategory);
+  const category = typeToCategory(type);
   return {
     name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 120) : '识别到的新心愿',
     price: Number.isFinite(price) && price >= 0 ? price : null,
     brand: typeof raw.brand === 'string' ? raw.brand.slice(0, 80) : null,
-    type: categoryToType(category),
+    type,
     category,
     skuLabel: typeof raw.sku_label === 'string' ? raw.sku_label.slice(0, 120) : null,
     details: typeof raw.summary === 'string' ? raw.summary.slice(0, 2000) : null,
     sourcePlatform: null,
+    totalUnits:raw.total_units!==null&&raw.total_units!==undefined&&raw.total_units!==''&&Number.isFinite(Number(raw.total_units))?Number(raw.total_units):null,
+    usageFrequency:typeof raw.usage_frequency==='string'?raw.usage_frequency.slice(0,120):null,
+    expiryDate:typeof raw.expiry_date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(raw.expiry_date)?raw.expiry_date:null,
     images: [],
     image_url: null,
     source_text: typeof raw.summary === 'string' ? raw.summary.slice(0, 300) : '已整理截图或商品页面中的信息。',
@@ -48,20 +53,21 @@ function fail(error: string, status: number, code?: string) {
 }
 
 async function identifyLink(url: string) {
-  const page = await readProductPage(url).catch(() => null);
-  return { page, url };
+  try{return { page:await readProductPage(url), url, sourceWarning:null };}
+  catch(error){return{page:null,url,sourceWarning:error instanceof Error?error.message:'商品页面无法直接读取'};}
 }
 
 async function identifyWithAi(url: string | null, page: { promptText: string } | null, image?: { base64: string; mimeType: string }, rawText?: string, hint?: string) {
   const schemaExample = {
     name: '商品或服务名称，无法确认则为 null', price: '人民币数字，无法确认则为 null',
-    category: '课程/会员/储值/实物/旅行体验 五选一', total_units: '次数、节数或天数，无法确认则为 null',
+    type: 'DURABLE_GOOD/SINGLE_USE/MEMBERSHIP/STORED_VALUE/COURSE_TRAINING/OTHER 六选一',
+    category: '六选一：高价值实物 | 一次性体验/消耗品 | 会员/订阅 | 储值/余额 | 课程/次卡 | 其他', total_units: '次数、节数或天数，无法确认则为 null',
     usage_frequency: '适合如何使用的客观信息，无法确认则为 null', expiry_date: '明确截止日期 YYYY-MM-DD，无法确认则为 null',
     summary: '不超过80字的商品摘要', confidence: '0到1之间的数字', evidence: ['识别依据，最多5条'], warnings: ['不确定或需用户核对的内容'],
     brand: '品牌，无法确认则为 null', sku_label: '型号/SKU，无法确认则为 null',
   };
   const { data } = await generateJson({
-    system: '你是 WorthBloom 的商品信息整理助手。只提取图片和网页中有依据的信息，不猜测、不编造，也不要替用户写购买理由。价格优先使用实际到手价；如果存在会员价、定金或优惠条件，放进 warnings。只返回合法 JSON。',
+    system: '你是 WorthBloom 的商品信息整理助手。只提取图片和网页中有依据的信息，不猜测、不编造，也不要替用户写购买理由。分类只有六类：高价值实物；一次性体验/消耗品（包含活动和旅行体验）；会员/订阅（一段时间内次数不限）；储值/余额（总价值确定）；课程/次卡（一段时间内次数有限）；其他。价格优先使用实际到手价；如果存在会员价、定金或优惠条件，放进 warnings。只返回合法 JSON。',
     prompt: [
       `今天是 ${new Date().toISOString().slice(0, 10)}。`,
       page?.promptText || (url ? `用户提供的原始链接：${url}` : ''),
@@ -97,9 +103,9 @@ export async function POST(request: Request) {
           return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot: fallbackSnapshot(raw, '', false), fallback: true });
         }
         try {
-          const { page } = await identifyLink(selectedUrl);
+          const { page,sourceWarning } = await identifyLink(selectedUrl);
           const snapshot = await identifyWithAi(selectedUrl, page, undefined, raw);
-          return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot, fallback: false });
+          return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot, fallback: false, sourceWarning });
         } catch {
           return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot: fallbackSnapshot(raw, '', false), fallback: true });
         }
@@ -141,9 +147,9 @@ export async function POST(request: Request) {
       const selectedUrl = candidates[0];
       if (!isAiConfigured()) return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot: fallbackSnapshot(raw, hint, false), fallback: true });
       try {
-        const { page } = await identifyLink(selectedUrl);
+        const { page,sourceWarning } = await identifyLink(selectedUrl);
         const snapshot = await identifyWithAi(selectedUrl, page, undefined, raw, hint);
-        return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot, fallback: false });
+        return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot, fallback: false, sourceWarning });
       } catch {
         return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot: fallbackSnapshot(raw, hint, false), fallback: true });
       }

@@ -112,6 +112,12 @@ export async function readProductPage(rawUrl: string) {
         .map(match => match[1].trim())
         .join('\n')
         .slice(0, 9_000);
+      const hydrationData = [
+        ...html.matchAll(/<script[^>]+(?:id=["']__NEXT_DATA__["']|type=["']application\/json["'])[^>]*>([\s\S]*?)<\/script>/gi),
+      ].map(match => match[1].trim())
+        .filter(value => /price|product|sku|商品|价格|课程|会员/i.test(value))
+        .join('\n')
+        .slice(0, 6_000);
       const visibleText = decodeEntities(html
         .replace(/<script[\s\S]*?<\/script>/gi, ' ')
         .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -125,6 +131,7 @@ export async function readProductPage(rawUrl: string) {
         description && `网页描述：${description}`,
         price && `页面价格元数据：${price}`,
         jsonLd && `JSON-LD：${jsonLd}`,
+        hydrationData && `页面内嵌商品数据：${hydrationData}`,
         visibleText && `页面正文：${visibleText}`,
       ].filter(Boolean).join('\n').slice(0, MAX_PROMPT_CHARS);
       return { url: url.toString(), promptText, title };

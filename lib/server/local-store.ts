@@ -1,7 +1,7 @@
-import type { AppData, Asset, Decision, GrowthAccount, GrowthLedgerEntry, InboxPage, PurchaseRequest, Review, ReviewChoice, ReviewInvite, UserProfile } from '@/lib/types';
-import { applyAssetUsage, AssetRuleError, parseAssetPayload } from '@/lib/asset-rules';
+import type { AppData, Asset, AssetReflection, Decision, GrowthAccount, GrowthLedgerEntry, InboxPage, PurchaseRequest, Review, ReviewChoice, ReviewInvite, UserProfile } from '@/lib/types';
+import { applyAssetUsage, assetTypeForRequest, AssetRuleError, costPerUse, normalizeAssetReflection, parseAssetPayload, parseAssetReflectionPayload } from '@/lib/asset-rules';
 import { isLocalPreviewHostname } from '@/lib/server/network';
-import { normalizeWish, normalizeReview } from '@/lib/wish-compat';
+import { canonicalWishType, isKnownWishType, normalizeDecision, normalizeSavingGoal, normalizeWish, normalizeReview, typeToCategory } from '@/lib/wish-compat';
 
 declare global {
   var __worthBloomLocalStore: AppData | undefined;
@@ -19,11 +19,9 @@ export class LocalStoreError extends Error {
 
 const now = () => new Date().toISOString();
 const token = () => crypto.randomUUID().replaceAll('-', '').slice(0,20);
-const WISH_TYPES=['COURSE_TRAINING','DURABLE_GOOD','SINGLE_USE','MEMBERSHIP','EXPERIENCE','OTHER'] as const;
-
 function seed(): AppData {
   return {
-    requests:[{ id:'request-iceland', name:'去冰岛看极光', price:18600, reason:'二十七岁以前，想认真地去一次很远的地方。不是逃离，是奖励自己终于学会独自出发。', category:'旅行体验', total_units:7, usage_frequency:'一次完整旅行', expiry_date:null, product_url:null, similar_item:null, status:'REVIEWING', review_token:'iceland-demo-2026', created_at:'2026-08-21T10:00:00Z', updatedAt:'2026-08-21T10:00:00Z', review_count:3, revision:1, sourceType:'MANUAL', type:'EXPERIENCE', concern:'', brand:'', skuLabel:'', details:'', sourcePlatform:'', images:[] }],
+    requests:[{ id:'request-iceland', name:'去冰岛看极光', price:18600, reason:'二十七岁以前，想认真地去一次很远的地方。不是逃离，是奖励自己终于学会独自出发。', category:'一次性体验/消耗品', total_units:1, usage_frequency:'一次完整旅行', expiry_date:null, product_url:null, similar_item:null, status:'REVIEWING', review_token:'iceland-demo-2026', created_at:'2026-08-21T10:00:00Z', updatedAt:'2026-08-21T10:00:00Z', review_count:3, revision:1, sourceType:'MANUAL', type:'SINGLE_USE', concern:'', brand:'', skuLabel:'', details:'', sourcePlatform:'', images:[] }],
     reviews:[
       { id:'r1', request_id:'request-iceland', reviewer_name:'桃子', choice:'SAVE_FIRST', comment:'这件事你念叨很久了，值得去。慢一点准备，会更安心。', created_at:'2026-08-22T10:00:00Z' },
       { id:'r2', request_id:'request-iceland', reviewer_name:'晴晴', choice:'BUY_NOW', comment:'支持出发，但别忘了把冬季装备和保险算进预算。', created_at:'2026-08-22T11:00:00Z' },
@@ -41,12 +39,39 @@ function seed(): AppData {
       { id:'asset-pottery', name:'六次陶艺体验课', type:'COURSE', purchase_price:980, total_units:6, used_units:3, current_balance:null, expiry_date:'2026-09-10', usage_count:3, last_used_at:'2026-08-11' },
       { id:'asset-headphones', name:'降噪耳机', type:'ITEM', purchase_price:2499, total_units:null, used_units:0, current_balance:null, expiry_date:null, usage_count:32, last_used_at:'2026-08-23' },
     ],
+    assetReflections:[],
   };
+}
+
+function repairLegacyLocalState(data: AppData) {
+  data.savingGoals = (data.savingGoals ?? []).map(goal => normalizeSavingGoal(goal as unknown as Record<string, unknown>));
+  data.decisions = (data.decisions ?? [])
+    .map(decision => normalizeDecision(decision as unknown as Record<string, unknown>))
+    .filter((decision): decision is Decision => decision !== null);
+
+  const recorded = new Set(data.decisions.map(decision => decision.request_id));
+  for (const request of data.requests) {
+    if (recorded.has(request.id) || request.status === 'REVIEWING') continue;
+    const goal = data.savingGoals.find(item => item.request_id === request.id);
+    const inferred: ReviewChoice = goal || request.status === 'SAVING'
+      ? 'SAVE_FIRST'
+      : request.status === 'ARCHIVED'
+        ? 'WAIT'
+        : 'BUY_NOW';
+    data.decisions.push({
+      request_id: request.id,
+      decision: inferred,
+      decided_at: goal?.created_at ?? request.updatedAt ?? request.createdAt ?? request.created_at ?? now(),
+    });
+    recorded.add(request.id);
+  }
+  data.decisions.sort((left, right) => right.decided_at.localeCompare(left.decided_at));
+  return data;
 }
 
 function store() {
   globalThis.__worthBloomLocalStore ??= seed();
-  return globalThis.__worthBloomLocalStore;
+  return repairLegacyLocalState(globalThis.__worthBloomLocalStore);
 }
 
 function levelForPoints(points:number):1|2|3|4{return points>=700?4:points>=300?3:points>=100?2:1}
@@ -91,14 +116,9 @@ export function getLocalData(): AppData {
     ...raw,
     requests: raw.requests.map(r => normalizeWish(r as unknown as Record<string, unknown>)),
     reviews: raw.reviews.map(r => normalizeReview(r as unknown as Record<string, unknown>)),
+    assets: raw.assets.map(asset => ({...asset,archived_at:asset.archived_at??null})),
+    assetReflections: raw.assetReflections.map(normalizeAssetReflection),
   };
-}
-
-function requestType(category:string): Asset['type'] {
-  if (category.includes('课程')) return 'COURSE';
-  if (category.includes('会员')) return 'MEMBERSHIP';
-  if (category.includes('储值')) return 'STORED_VALUE';
-  return 'ITEM';
 }
 
 export function handleLocalDataAction(body:Record<string,unknown>) {
@@ -118,17 +138,19 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     const reason=String(payload.reason??'').trim().slice(0,500);
     const price=Number(payload.price);
     const concern=String(payload.concern??payload.similar_item??'').trim().slice(0,200);
-    const typeRaw=String(payload.type??'').trim();
+    const suppliedType=String(payload.type??'').trim();
+    const legacyCategory=String(payload.category??'').trim();
     if(!name)throw new LocalStoreError('请填写商品或课程名称',400,'name');
     if(!reason)throw new LocalStoreError('请填写你为什么想要它',400,'reason');
     if(!Number.isFinite(price)||price<0||price>99_999_999.99)throw new LocalStoreError('请填写有效价格',400,'price');
     if(!concern)throw new LocalStoreError('请填写或选择你最担心的问题',400,'concern');
-    if(!typeRaw||!WISH_TYPES.includes(typeRaw as typeof WISH_TYPES[number]))throw new LocalStoreError('请选择类型',400,'type');
+    if((!suppliedType&&!legacyCategory)||(suppliedType&&!isKnownWishType(suppliedType)))throw new LocalStoreError('请选择类型',400,'type');
+    const typeRaw=canonicalWishType(suppliedType,legacyCategory);
     const id=crypto.randomUUID();
     const ts=now();
     const images:Array<{id:string;url:string;sortOrder:number;isCover:boolean}>=Array.isArray(payload.images)?(payload.images as Array<Record<string,unknown>>).slice(0,6).map((img,index)=>({id:String(img.id??crypto.randomUUID()),url:String(img.url??''),sortOrder:Number(img.sortOrder??index),isCover:Boolean(img.isCover)})):[];
     if(images.length&&!images.some(img=>img.isCover))images[0].isCover=true;
-    const request:PurchaseRequest={ id,name,price,reason,category:String(payload.category??''),total_units:payload.total_units==null&&payload.totalUnits==null?null:Number(payload.total_units??payload.totalUnits),usage_frequency:payload.usage_frequency?String(payload.usage_frequency):payload.usageFrequency?String(payload.usageFrequency):null,expiry_date:payload.expiry_date?String(payload.expiry_date):payload.expiryDate?String(payload.expiryDate):null,product_url:payload.product_url?String(payload.product_url):payload.productUrl?String(payload.productUrl):null,similar_item:concern,status:'REVIEWING',review_token:token(),created_at:ts,updatedAt:ts,review_count:0,revision:1,sourceType:(payload.sourceType??payload.source_type??'MANUAL') as PurchaseRequest['sourceType'],type:typeRaw as PurchaseRequest['type'],concern,brand:String(payload.brand??'').slice(0,80),skuLabel:String(payload.skuLabel??payload.sku_label??'').slice(0,120),details:String(payload.details??'').slice(0,2000),sourcePlatform:String(payload.sourcePlatform??payload.source_platform??'').slice(0,40),productUrl:payload.product_url?String(payload.product_url):payload.productUrl?String(payload.productUrl):null,images,totalUnits:payload.total_units==null&&payload.totalUnits==null?null:Number(payload.total_units??payload.totalUnits),usageFrequency:payload.usage_frequency?String(payload.usage_frequency):payload.usageFrequency?String(payload.usageFrequency):null,expiryDate:payload.expiry_date?String(payload.expiry_date):payload.expiryDate?String(payload.expiryDate):null,reviewToken:undefined,decisionNote:undefined };
+    const request:PurchaseRequest={ id,name,price,reason,category:typeToCategory(typeRaw),total_units:payload.total_units==null&&payload.totalUnits==null?null:Number(payload.total_units??payload.totalUnits),usage_frequency:payload.usage_frequency?String(payload.usage_frequency):payload.usageFrequency?String(payload.usageFrequency):null,expiry_date:payload.expiry_date?String(payload.expiry_date):payload.expiryDate?String(payload.expiryDate):null,product_url:payload.product_url?String(payload.product_url):payload.productUrl?String(payload.productUrl):null,similar_item:concern,status:'REVIEWING',review_token:token(),created_at:ts,updatedAt:ts,review_count:0,revision:1,sourceType:(payload.sourceType??payload.source_type??'MANUAL') as PurchaseRequest['sourceType'],type:typeRaw,concern,brand:String(payload.brand??'').slice(0,80),skuLabel:String(payload.skuLabel??payload.sku_label??'').slice(0,120),details:String(payload.details??'').slice(0,2000),sourcePlatform:String(payload.sourcePlatform??payload.source_platform??'').slice(0,40),productUrl:payload.product_url?String(payload.product_url):payload.productUrl?String(payload.productUrl):null,images,totalUnits:payload.total_units==null&&payload.totalUnits==null?null:Number(payload.total_units??payload.totalUnits),usageFrequency:payload.usage_frequency?String(payload.usage_frequency):payload.usageFrequency?String(payload.usageFrequency):null,expiryDate:payload.expiry_date?String(payload.expiry_date):payload.expiryDate?String(payload.expiryDate):null,reviewToken:undefined,decisionNote:undefined };
     const invites:ReviewInvite[]=[1,2,3].map(index=>({id:crypto.randomUUID(),request_id:id,token:token(),label:`朋友 ${index}`,used_by:null,used_at:null,revoked:0,created_at:ts}));
     data.requests.unshift(request); data.invites.push(...invites);
     return { request:normalizeWish(request as unknown as Record<string,unknown>), invites };
@@ -146,18 +168,26 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     if(typeof payload.price==='number')request.price=payload.price;
     if(typeof payload.reason==='string')request.reason=payload.reason.trim().slice(0,500);
     if(typeof payload.concern==='string')request.concern=payload.concern.trim().slice(0,200);
-    if(typeof payload.type==='string')request.type=payload.type as PurchaseRequest['type'];
+    if(typeof payload.type==='string'){
+      if(!isKnownWishType(payload.type))throw new LocalStoreError('请选择类型',400,'type');
+      request.type=canonicalWishType(payload.type);request.category=typeToCategory(request.type);
+    }else if(typeof payload.category==='string'){
+      request.type=canonicalWishType(undefined,payload.category);request.category=typeToCategory(request.type);
+    }
     if(typeof payload.brand==='string')request.brand=payload.brand.slice(0,80);
     if(typeof payload.skuLabel==='string'||typeof payload.sku_label==='string')request.skuLabel=String(payload.skuLabel??payload.sku_label).slice(0,120);
     if(typeof payload.details==='string')request.details=payload.details.slice(0,2000);
     if(typeof payload.productUrl==='string'||typeof payload.product_url==='string')request.productUrl=String(payload.productUrl??payload.product_url);
     if(typeof payload.sourcePlatform==='string'||typeof payload.source_platform==='string')request.sourcePlatform=String(payload.sourcePlatform??payload.source_platform).slice(0,40);
+    if(payload.totalUnits!==undefined||payload.total_units!==undefined){request.total_units=payload.totalUnits==null&&payload.total_units==null?null:Number(payload.totalUnits??payload.total_units);request.totalUnits=request.total_units}
+    if(payload.usageFrequency!==undefined||payload.usage_frequency!==undefined){request.usage_frequency=String(payload.usageFrequency??payload.usage_frequency??'')||null;request.usageFrequency=request.usage_frequency}
+    if(payload.expiryDate!==undefined||payload.expiry_date!==undefined){request.expiry_date=String(payload.expiryDate??payload.expiry_date??'')||null;request.expiryDate=request.expiry_date}
     if(Array.isArray(payload.images)){request.images=(payload.images as Array<Record<string,unknown>>).slice(0,6).map((img,index)=>({id:String(img.id??crypto.randomUUID()),url:String(img.url??''),sortOrder:Number(img.sortOrder??index),isCover:Boolean(img.isCover)}));if(request.images.length&&!request.images.some(img=>img.isCover))request.images[0].isCover=true}
     if(!request.name.trim())throw new LocalStoreError('请填写商品或课程名称',400,'name');
     if(!request.reason.trim())throw new LocalStoreError('请填写你为什么想要它',400,'reason');
     if(!Number.isFinite(request.price)||request.price<0||request.price>99_999_999.99)throw new LocalStoreError('请填写有效价格',400,'price');
     if(!String(request.concern??'').trim())throw new LocalStoreError('请填写或选择你最担心的问题',400,'concern');
-    if(!request.type||!WISH_TYPES.includes(request.type))throw new LocalStoreError('请选择类型',400,'type');
+    if(!request.type||!isKnownWishType(request.type))throw new LocalStoreError('请选择类型',400,'type');
     request.revision=currentRev+1; request.updatedAt=now(); request.similar_item=request.concern;
     return { request:normalizeWish(request as unknown as Record<string,unknown>) };
   }
@@ -176,10 +206,10 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     goal.current=Math.min(goal.target,goal.current+amount);
     if(goal.current<goal.target)return {goal,completed:false};
     const request=goal.request_id?data.requests.find(item=>item.id===goal.request_id):null;
-    const type=request?requestType(request.category??''):'ITEM';
+    const type=request?assetTypeForRequest(request):'ITEM';
     const assetId=request?`asset-${request.id}`:`asset-${goal.id}`;
     let asset=data.assets.find(item=>item.id===assetId);
-    if(!asset){asset={id:assetId,name:goal.name,type,purchase_price:goal.target,total_units:request?.total_units??null,used_units:0,current_balance:type==='STORED_VALUE'?goal.target:null,expiry_date:request?.expiry_date??null,usage_count:0,last_used_at:null,bloom_until:new Date(Date.now()+20_000).toISOString()};data.assets.unshift(asset)}
+    if(!asset){asset={id:assetId,request_id:request?.id??null,name:goal.name,type,purchase_price:goal.target,total_units:type==='EXPERIENCE'?1:request?.total_units??null,used_units:0,current_balance:type==='STORED_VALUE'?goal.target:null,expiry_date:request?.expiry_date??null,usage_count:0,last_used_at:null,bloom_until:new Date(Date.now()+20_000).toISOString()};data.assets.unshift(asset)}
     if(request)request.status='PURCHASED';
     data.savingGoals=data.savingGoals.filter(item=>item.id!==goal.id); globalThis.__worthBloomLocalStore=data;
     return {goal,completed:true,asset};
@@ -197,6 +227,13 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     try{const usage=applyAssetUsage(asset,body.amount);asset.used_units=usage.used_units;asset.usage_count=usage.usage_count;asset.current_balance=usage.current_balance}catch(error){if(error instanceof AssetRuleError)throw new LocalStoreError(error.message,error.status);throw error}
     asset.last_used_at=new Date().toISOString().slice(0,10); asset.recovering_until=new Date(Date.now()+10_000).toISOString(); return {ok:true,asset};
   }
+  if (body.action === 'add_asset_reflection') {
+    const asset=data.assets.find(item=>item.id===String(body.assetId??''));if(!asset)throw new LocalStoreError('没有找到这个物资',404);
+    let reflectionInput:ReturnType<typeof parseAssetReflectionPayload>;
+    try{reflectionInput=parseAssetReflectionPayload(body)}catch(error){if(error instanceof AssetRuleError)throw new LocalStoreError(error.message,error.status);throw error}
+    const {feeling,rating,wouldBuyAgain,note,trigger}=reflectionInput;const createdAt=now();
+    const reflection:AssetReflection={id:crypto.randomUUID(),asset_id:asset.id,asset_name:asset.name,asset_type:asset.type,feeling,rating,would_buy_again:wouldBuyAgain,note,trigger,usage_count:asset.usage_count,cost_per_use:costPerUse(asset),created_at:createdAt};data.assetReflections.unshift(reflection);if(trigger!=='MANUAL')asset.archived_at??=createdAt;awardLocalGrowth('owner-preview','asset_reflection',asset.id,15);return{reflection,asset};
+  }
   if (body.action === 'save_decision_note') {
     const request=data.requests.find(item=>item.id===String(body.requestId??'')); if(!request)throw new LocalStoreError('没有找到这个心愿',404);
     request.decision_note=String(body.note??'').trim().slice(0,2000); return {ok:true};
@@ -204,11 +241,13 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
   if (body.action === 'decide') {
     const decision=String(body.decision) as ReviewChoice; if(!['BUY_NOW','SAVE_FIRST','WAIT'].includes(decision))throw new LocalStoreError('无效决定');
     const request=data.requests.find(item=>item.id===String(body.requestId??'')); if(!request||request.status!=='REVIEWING')throw new LocalStoreError('这个心愿已经完成决定',409);
-    request.status=decision==='BUY_NOW'?'PURCHASED':decision==='SAVE_FIRST'?'SAVING':'ARCHIVED'; if(body.note)request.decision_note=String(body.note).trim().slice(0,2000); data.invites.filter(item=>item.request_id===request.id&&!item.used_at).forEach(item=>item.revoked=1);
+    const decidedAt=now();request.status=decision==='BUY_NOW'?'PURCHASED':decision==='SAVE_FIRST'?'SAVING':'ARCHIVED'; if(body.note)request.decision_note=String(body.note).trim().slice(0,2000); data.invites.filter(item=>item.request_id===request.id&&!item.used_at).forEach(item=>item.revoked=1);
+    const existingDecision=data.decisions.find(item=>item.request_id===request.id);if(existingDecision){existingDecision.decision=decision;existingDecision.decided_at=decidedAt}else data.decisions.unshift({request_id:request.id,decision,decided_at:decidedAt});
     if(decision==='SAVE_FIRST'&&!data.savingGoals.some(item=>item.request_id===request.id))data.savingGoals.unshift({id:`saving-${request.id}`,request_id:request.id,name:request.name,target:request.price,current:0,weekly_plan:null,created_at:now()});
-    if(decision==='BUY_NOW'&&!data.assets.some(item=>item.id===`asset-${request.id}`)){const cat=request.category??'';data.assets.unshift({id:`asset-${request.id}`,name:request.name,type:requestType(cat),purchase_price:request.price,total_units:request.total_units ?? null,used_units:0,current_balance:requestType(cat)==='STORED_VALUE'?request.price:null,expiry_date:request.expiry_date ?? null,usage_count:0,last_used_at:null,bloom_until:new Date(Date.now()+20_000).toISOString()});}
+    let asset:Asset|null=null;const goal=data.savingGoals.find(item=>item.request_id===request.id)??null;
+    if(decision==='BUY_NOW'&&!data.assets.some(item=>item.id===`asset-${request.id}`)){const type=assetTypeForRequest(request);asset={id:`asset-${request.id}`,request_id:request.id,name:request.name,type,purchase_price:request.price,total_units:type==='EXPERIENCE'?1:request.total_units ?? null,used_units:0,current_balance:type==='STORED_VALUE'?request.price:null,expiry_date:request.expiry_date ?? null,usage_count:0,last_used_at:null,bloom_until:new Date(Date.now()+20_000).toISOString()};data.assets.unshift(asset)}else if(decision==='BUY_NOW')asset=data.assets.find(item=>item.id===`asset-${request.id}`)??null;
     if(request.decision_note)awardLocalGrowth('owner-preview','decision_with_reason',request.id,20);
-    return {ok:true,target:decision==='BUY_NOW'?'assets':decision==='SAVE_FIRST'?'saving':'wishes'};
+    return {ok:true,target:decision==='BUY_NOW'?'assets':decision==='SAVE_FIRST'?'saving':'wishes',goal,asset};
   }
   throw new LocalStoreError('不支持的操作');
 }

@@ -39,9 +39,10 @@ function assetState(asset:Asset, now:number):DeviceState {
 }
 
 export function deriveDeviceState(data:AppData, timestamp=Date.now()):DeviceState {
-  const blooming=data.assets.find(asset=>asset.bloom_until && new Date(asset.bloom_until).getTime()>timestamp);
+  const activeAssets=data.assets.filter(asset=>!asset.archived_at);
+  const blooming=activeAssets.find(asset=>asset.bloom_until && new Date(asset.bloom_until).getTime()>timestamp);
   if(blooming)return assetState(blooming,timestamp);
-  const recovering=data.assets.find(asset=>asset.recovering_until && new Date(asset.recovering_until).getTime()>timestamp);
+  const recovering=activeAssets.find(asset=>asset.recovering_until && new Date(asset.recovering_until).getTime()>timestamp);
   if(recovering)return assetState(recovering,timestamp);
 
   const goal=data.savingGoals[0];
@@ -57,6 +58,6 @@ export function deriveDeviceState(data:AppData, timestamp=Date.now()):DeviceStat
     return {mode:'WAITING',title:wish.name,progress:invites.length?clamp(replies/invites.length):0,flower_health:78,remaining:Math.max(0,invites.length-replies),days_left:null,message:`Waiting for ${Math.max(0,invites.length-replies)} friends`,asset_id:null};
   }
 
-  if(data.assets[0])return assetState(data.assets[0],timestamp);
+  if(activeAssets[0])return assetState(activeAssets[0],timestamp);
   return {mode:'SEED',title:'A new beginning',progress:0.06,flower_health:72,remaining:null,days_left:null,message:'Plant your first wish',asset_id:null};
 }

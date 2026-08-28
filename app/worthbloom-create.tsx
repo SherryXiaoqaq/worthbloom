@@ -1,11 +1,12 @@
 'use client';
 
 import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
-import type { ClarificationQuestion, ProductSnapshot, PurchaseRequest, ReviewInvite, WishImage, WishSourceType, WishType } from '@/lib/types';
+import type { AssetReflection, ClarificationQuestion, ProductSnapshot, PurchaseRequest, ReviewInvite, WishImage, WishSourceType, WishType } from '@/lib/types';
 import { usageFrequencyOptions } from '@/lib/types';
 import { cloudBaseFetch } from '@/lib/cloudbase/client';
 import { extractUrls } from '@/lib/url-extract';
-import { categoryToType, typeToCategory } from '@/lib/wish-compat';
+import { canonicalWishType, typeToCategory, WISH_TYPE_OPTIONS } from '@/lib/wish-compat';
+import { assetTypeForWish } from '@/lib/asset-rules';
 import { Icon } from './worthbloom-views';
 import styles from './worthbloom-v2.module.css';
 
@@ -26,24 +27,19 @@ type Draft = {
   productUrl: string;
   sourcePlatform: string;
   usageFrequency: string;
+  totalUnits:string;
+  expiryDate:string;
 };
 
 const emptyDraft: Draft = {
   sourceType: 'MANUAL', raw: '', images: [], name: '', price: '', type: 'DURABLE_GOOD',
   reason: '', concern: '', brand: '', skuLabel: '', details: '', productUrl: '', sourcePlatform: '', usageFrequency: '',
+  totalUnits:'',expiryDate:'',
 };
-
-const TYPE_LABELS: { value: WishType; label: string }[] = [
-  { value: 'COURSE_TRAINING', label: '训练课程' },
-  { value: 'DURABLE_GOOD', label: '较高价商品' },
-  { value: 'SINGLE_USE', label: '一次性消费' },
-  { value: 'MEMBERSHIP', label: '会员服务' },
-  { value: 'EXPERIENCE', label: '体验活动' },
-  { value: 'OTHER', label: '其他' },
-];
 
 const CONSTRAINT_OPTIONS = ['时间安排', '预算压力', '距离或携带', '动力与坚持', '其他原因', '暂时不确定'];
 const ALTERNATIVE_OPTIONS = ['可以先试用/体验', '可以买基础款', '可以等一等', '暂时没有'];
+const REFLECTION_FEELING_LABELS:Record<AssetReflection['feeling'],string>={BECAME_PART_OF_LIFE:'成了生活的一部分',SOMETIMES_USEFUL:'偶尔派上用场',BARELY_USED:'没有想象中常用',NOT_FOR_ME:'这次不太适合我'};
 
 async function json<T>(response: Response): Promise<T> {
   const data = await response.json() as T & { error?: string };
@@ -51,7 +47,7 @@ async function json<T>(response: Response): Promise<T> {
   return data;
 }
 
-export default function CreateWishSheet({ open, onClose, onCreated, editRequest }: { open: boolean; onClose: () => void; onCreated: (request: PurchaseRequest, invites: ReviewInvite[]) => void; editRequest?: PurchaseRequest | null }) {
+export default function CreateWishSheet({ open, onClose, onCreated, editRequest, pastReflections=[] }: { open: boolean; onClose: () => void; onCreated: (request: PurchaseRequest, invites: ReviewInvite[]) => void; editRequest?: PurchaseRequest | null; pastReflections?:AssetReflection[] }) {
   const [step, setStep] = useState<CreateStep>('choose');
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [snapshot, setSnapshot] = useState<ProductSnapshot | null>(null);
@@ -67,11 +63,11 @@ export default function CreateWishSheet({ open, onClose, onCreated, editRequest 
       const imgs = Array.isArray(editRequest.images) ? editRequest.images : [];
       setDraft({
         sourceType: editRequest.sourceType ?? 'MANUAL', raw: editRequest.productUrl ?? editRequest.product_url ?? '', images: imgs,
-        name: editRequest.name, price: String(editRequest.price), type: editRequest.type ?? 'OTHER',
+        name: editRequest.name, price: String(editRequest.price), type: canonicalWishType(editRequest.type, editRequest.category),
         reason: editRequest.reason, concern: editRequest.concern ?? editRequest.similar_item ?? '',
         brand: editRequest.brand ?? '', skuLabel: editRequest.skuLabel ?? '', details: editRequest.details ?? '',
         productUrl: editRequest.productUrl ?? editRequest.product_url ?? '', sourcePlatform: editRequest.sourcePlatform ?? '',
-        usageFrequency: editRequest.usageFrequency ?? editRequest.usage_frequency ?? '',
+        usageFrequency: editRequest.usageFrequency ?? editRequest.usage_frequency ?? '', totalUnits:editRequest.totalUnits==null&&editRequest.total_units==null?'':String(editRequest.totalUnits??editRequest.total_units),expiryDate:editRequest.expiryDate??editRequest.expiry_date??'',
       });
       setSnapshot(null); setUrlCandidates([]); setQuestions([]); setAnswers({}); setCustomText({}); setMessage('');
       setStep('confirm');
@@ -129,7 +125,7 @@ export default function CreateWishSheet({ open, onClose, onCreated, editRequest 
   async function identifyLink(selectedUrl: string) {
     setBusy('extract'); setMessage('');
     try {
-      const result = await json<{ status?: string; urlCandidates?: string[]; selectedUrl?: string | null; snapshot?: ProductSnapshot; fallback?: boolean }>(
+      const result = await json<{ status?: string; urlCandidates?: string[]; selectedUrl?: string | null; snapshot?: ProductSnapshot; fallback?: boolean; sourceWarning?:string|null }>(
         await cloudBaseFetch('/api/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ source: { type: 'LINK', raw: draft.raw }, selectedUrl }) })
       );
       setUrlCandidates([]);
@@ -139,16 +135,19 @@ export default function CreateWishSheet({ open, onClose, onCreated, editRequest 
           ...prev,
           name: result.snapshot!.name || prev.name,
           price: result.snapshot!.price == null ? prev.price : String(result.snapshot!.price),
-          type: result.snapshot!.type ?? categoryToType(result.snapshot!.category),
+          type: canonicalWishType(result.snapshot!.type, result.snapshot!.category),
           brand: result.snapshot!.brand ?? prev.brand,
           skuLabel: result.snapshot!.skuLabel ?? prev.skuLabel,
           details: result.snapshot!.details ?? prev.details,
           productUrl: selectedUrl,
           sourcePlatform: result.snapshot!.sourcePlatform ?? prev.sourcePlatform,
+          totalUnits:result.snapshot!.totalUnits==null?prev.totalUnits:String(result.snapshot!.totalUnits),
+          usageFrequency:result.snapshot!.usageFrequency??prev.usageFrequency,
+          expiryDate:result.snapshot!.expiryDate??prev.expiryDate,
         }));
       }
       setStep('confirm');
-      setMessage(result.fallback ? '识别服务暂不可用，已用演示信息预填，请逐项确认。' : 'AI 已提取候选信息，请逐项确认。');
+      setMessage(result.fallback ? '这次没能完整读取页面，已尽量整理分享文案，请逐项核对。' : result.sourceWarning ? `${result.sourceWarning}。结果主要来自分享文案，建议补一张截图核对。` : '页面信息已经整理好，请逐项核对。');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '识别失败，请手动填写');
       setStep('confirm');
@@ -169,14 +168,17 @@ export default function CreateWishSheet({ open, onClose, onCreated, editRequest 
           ...prev,
           name: result.snapshot!.name || prev.name,
           price: result.snapshot!.price == null ? prev.price : String(result.snapshot!.price),
-          type: result.snapshot!.type ?? categoryToType(result.snapshot!.category),
+          type: canonicalWishType(result.snapshot!.type, result.snapshot!.category),
           brand: result.snapshot!.brand ?? prev.brand,
           skuLabel: result.snapshot!.skuLabel ?? prev.skuLabel,
           details: result.snapshot!.details ?? prev.details,
+          totalUnits:result.snapshot!.totalUnits==null?prev.totalUnits:String(result.snapshot!.totalUnits),
+          usageFrequency:result.snapshot!.usageFrequency??prev.usageFrequency,
+          expiryDate:result.snapshot!.expiryDate??prev.expiryDate,
         }));
       }
       setStep('confirm');
-      setMessage(result.fallback ? '识别服务暂不可用，已用演示信息预填，请逐项确认。' : 'AI 已提取候选信息，请逐项确认。');
+      setMessage(result.fallback ? '这次没能完整识别截图，请手动补全。' : '截图信息已经整理好，请逐项核对。');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '识别失败，请手动填写');
       setStep('confirm');
@@ -193,6 +195,7 @@ export default function CreateWishSheet({ open, onClose, onCreated, editRequest 
     if (!reason || reason.length > 500) { setMessage('请填写 1–500 字的购买理由。'); return; }
     if (!concern || concern.length > 200) { setMessage('请填写或选择 1–200 字的最担心问题。'); return; }
     const freqOpts = usageFrequencyOptions[draft.type];
+    setAnswers(previous=>({...previous,frequency:draft.usageFrequency||previous.frequency}));
     setQuestions([
       { id: 'frequency', prompt: '如果买下它，你最可能多久使用一次？', options: freqOpts, allowSkip: true },
       { id: 'constraint', prompt: '真正阻碍你使用它的条件是什么？', options: CONSTRAINT_OPTIONS, allowSkip: true, allowCustom: true, customMaxLength: 80 },
@@ -201,24 +204,17 @@ export default function CreateWishSheet({ open, onClose, onCreated, editRequest 
     setStep('clarify'); setMessage('');
   }
 
-  function answerOf(q: ClarificationQuestion): string | null {
-    const v = answers[q.id];
-    if (v === undefined) return null;
-    if (q.allowCustom && v === '其他原因') return customText[q.id]?.trim() || null;
-    return v;
-  }
-
   async function createWish() {
     setBusy('create'); setMessage('');
     try {
       const payload = {
         sourceType: draft.sourceType,
-        name: draft.name.trim(), price: Number(draft.price), type: draft.type,
+        name: draft.name.trim(), price: Number(draft.price), type: draft.type, category:typeToCategory(draft.type),
         reason: draft.reason.trim(), concern: draft.concern.trim(),
         brand: draft.brand.trim(), skuLabel: draft.skuLabel.trim(), details: draft.details.trim(),
         productUrl: draft.productUrl || null, sourcePlatform: draft.sourcePlatform.trim(),
         images: draft.images.map((img, i) => ({ id: img.id, url: img.url, sortOrder: i, isCover: img.isCover })),
-        usageFrequency: answers.frequency ?? null,
+        usageFrequency: answers.frequency ?? draft.usageFrequency ?? null,totalUnits:draft.totalUnits?Number(draft.totalUnits):null,expiryDate:draft.expiryDate||null,
       };
       if (editRequest) {
         const output = await json<{ request: PurchaseRequest }>(
@@ -236,15 +232,16 @@ export default function CreateWishSheet({ open, onClose, onCreated, editRequest 
     } finally { setBusy(''); }
   }
 
-  const title = step === 'choose' ? '种下一个新心愿' : step === 'source' ? '导入心愿线索' : step === 'confirm' ? '确认心愿信息' : '用三个问题想清楚';
+  const relatedReflections=pastReflections.filter(item=>item.asset_type===assetTypeForWish(draft.type)).slice(0,2);
+  const title = step === 'choose' ? '记下一个新心愿' : step === 'source' ? '导入商品信息' : step === 'confirm' ? '确认心愿信息' : '再想三个小问题';
   return <div className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="create-title"><button className={styles.scrim} onClick={close} aria-label="关闭创建窗口" /><section className={styles.sheet}>
     <header className={styles.sheetHeader}>{step === 'choose' ? <span aria-hidden="true" /> : <button onClick={back} aria-label="返回"><Icon name="back" /></button>}<div><small>PLANT A WISH</small><h2 id="create-title">{title}</h2></div><button onClick={close} aria-label="关闭">×</button></header>
 
     {step === 'choose' && (
       <div className={styles.createChoices}>
-        <button onClick={() => start('LINK')}><i>01</i><span><b>链接智能导入</b><small>粘贴商品链接或分享文案</small></span><Icon name="external" size={17} /></button>
+        <button onClick={() => start('LINK')}><i>01</i><span><b>从链接导入</b><small>读取商品页或分享文案</small></span><Icon name="external" size={17} /></button>
         <button onClick={() => start('MANUAL')}><i>02</i><span><b>手动创建</b><small>用选择和少量文字完成</small></span><Icon name="plus" size={18} /></button>
-        <button onClick={() => start('SCREENSHOT')}><i>03</i><span><b>截图智能导入</b><small>AI 先识别，你再确认事实</small></span><Icon name="sparkle" size={17} /></button>
+        <button onClick={() => start('SCREENSHOT')}><i>03</i><span><b>从截图导入</b><small>先整理画面信息，再由你确认</small></span><Icon name="sparkle" size={17} /></button>
       </div>
     )}
 
@@ -286,16 +283,18 @@ export default function CreateWishSheet({ open, onClose, onCreated, editRequest 
 
     {step === 'confirm' && (
       <form className={styles.form} onSubmit={confirm}>
-        {snapshot && <div className={styles.aiNotice}><b>AI 候选信息</b><span>置信度 {Math.round(snapshot.confidence * 100)}% · 需要确认</span></div>}
+        {snapshot && <div className={styles.aiNotice}><b>识别结果</b><span>把握 {Math.round(snapshot.confidence * 100)}% · 请核对</span></div>}
         <label><span>它是什么 *</span><input value={draft.name} maxLength={80} onChange={event => setDraft(prev => ({ ...prev, name: event.target.value }))} placeholder="例如：十二节现代舞训练课" /></label>
         <div className={styles.formPair}>
           <label><span>价格 *</span><input type="number" min="0" step="0.01" value={draft.price} onChange={event => setDraft(prev => ({ ...prev, price: event.target.value }))} placeholder="¥ 0" /></label>
-          <label><span>类型 *</span><select value={draft.type} onChange={event => { const t = event.target.value as WishType; setDraft(prev => ({ ...prev, type: t, usageFrequency: usageFrequencyOptions[t].includes(prev.usageFrequency) ? prev.usageFrequency : '' })); }}><option value="" disabled>请选择</option>{TYPE_LABELS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select></label>
+          <label><span>类型 *</span><select value={draft.type} onChange={event => { const t = event.target.value as WishType; setDraft(prev => ({ ...prev, type: t, usageFrequency: usageFrequencyOptions[t].includes(prev.usageFrequency) ? prev.usageFrequency : '' })); }}><option value="" disabled>请选择</option>{WISH_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select></label>
         </div>
         <label><span>为什么想要它？ *</span><textarea rows={3} maxLength={500} value={draft.reason} onChange={event => setDraft(prev => ({ ...prev, reason: event.target.value }))} placeholder="先说最真实的理由" /></label>
         <label><span>最担心什么？ *</span><input maxLength={200} value={draft.concern} onChange={event => setDraft(prev => ({ ...prev, concern: event.target.value }))} placeholder="例如：戴久不舒服 / 坚持不下来" />
           <div className={styles.chips} style={{ marginTop: 6 }}>{['坚持不下来', '预算压力', '不适合自己', '买完闲置'].map(item => <button type="button" className={draft.concern === item ? styles.chipActive : ''} key={item} onClick={() => setDraft(prev => ({ ...prev, concern: item }))}>{item}</button>)}</div>
         </label>
+        <div className={styles.formPair}>{draft.type==='COURSE_TRAINING'&&<label><span>总次数 / 节数</span><input type="number" min="1" value={draft.totalUnits} onChange={event=>setDraft(prev=>({...prev,totalUnits:event.target.value}))} placeholder="例如 12"/></label>}<label><span>有效期</span><input type="date" value={draft.expiryDate} onChange={event=>setDraft(prev=>({...prev,expiryDate:event.target.value}))}/></label></div>
+        {!editRequest&&relatedReflections.length>0&&<aside className={styles.historyReminder}><b>你以前留下过类似体验</b>{relatedReflections.map(item=><p key={item.id}><span>{item.asset_name} · {REFLECTION_FEELING_LABELS[item.feeling]}</span>{item.note}</p>)}<small>这不是结论，只是把过去的真实使用感受放回眼前。</small></aside>}
         <details style={{ marginTop: 8 }}>
           <summary style={{ cursor: 'pointer', fontSize: 13, color: '#646a73' }}>更多选填字段（品牌 / 规格 / 详情 / 来源）</summary>
           <div className={styles.formPair} style={{ marginTop: 8 }}>
@@ -320,7 +319,7 @@ export default function CreateWishSheet({ open, onClose, onCreated, editRequest 
             </div>
           </div>
         )}
-        <button className={styles.primary}>确认，继续澄清</button>
+        <button className={styles.primary}>继续</button>
       </form>
     )}
 

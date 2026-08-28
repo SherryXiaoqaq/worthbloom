@@ -1,9 +1,9 @@
 import 'server-only';
 
-import type { AppData, Asset, Decision, GrowthAccount, GrowthLedgerEntry, InboxPage, PurchaseRequest, Review, ReviewChoice, ReviewInvite, SavingGoal, UserProfile } from '@/lib/types';
-import { applyAssetUsage, AssetRuleError, parseAssetPayload } from '@/lib/asset-rules';
+import type { AppData, Asset, AssetReflection, Decision, GrowthAccount, GrowthLedgerEntry, InboxPage, PurchaseRequest, Review, ReviewChoice, ReviewInvite, SavingGoal, UserProfile } from '@/lib/types';
+import { applyAssetUsage, assetTypeForWish, AssetRuleError, costPerUse, normalizeAssetReflection, parseAssetPayload, parseAssetReflectionPayload } from '@/lib/asset-rules';
 import { getCloudBaseDb } from './cloudbase-http-db';
-import { normalizeWish, normalizeReview, buildReviewContext } from '@/lib/wish-compat';
+import { canonicalWishType, isKnownWishType, normalizeDecision, normalizeSavingGoal, normalizeWish, normalizeReview, buildReviewContext, typeToCategory } from '@/lib/wish-compat';
 import { digestClaimToken } from './claim-token';
 
 type CloudDocument = Record<string, unknown> & { _id?: string; id?: string; owner_id?: string };
@@ -17,6 +17,7 @@ const collections = {
   saving: 'saving_goals',
   assets: 'assets',
   usage: 'usage_records',
+  reflections: 'asset_reflections',
   wishImages: 'wish_images',
   claimTokens: 'claim_tokens',
   growth: 'growth_accounts',
@@ -27,8 +28,6 @@ const collections = {
   profiles: 'user_profiles',
   inboxStates: 'inbox_states',
 } as const;
-const WISH_TYPES=['COURSE_TRAINING','DURABLE_GOOD','SINGLE_USE','MEMBERSHIP','EXPERIENCE','OTHER'] as const;
-
 const now = () => new Date().toISOString();
 const today = () => new Date().toISOString().slice(0, 10);
 const inviteToken = () => crypto.randomUUID().replaceAll('-', '').slice(0, 20);
@@ -39,13 +38,6 @@ export class CloudBaseStoreError extends Error {
     super(message);
     this.code = code;
   }
-}
-
-function requestType(category: string): Asset['type'] {
-  if (category.includes('课程')) return 'COURSE';
-  if (category.includes('会员')) return 'MEMBERSHIP';
-  if (category.includes('储值')) return 'STORED_VALUE';
-  return 'ITEM';
 }
 
 function cleanDocument(document: CloudDocument) {
@@ -221,13 +213,14 @@ export async function markCloudBaseInboxRead(ownerId: string, reviewIds: string[
 }
 
 export async function loadCloudBaseData(ownerId: string): Promise<AppData> {
-  const [requestDocuments, reviewDocuments, inviteDocuments, savingDocuments, assetDocuments, decisionDocuments] = await Promise.all([
+  const [requestDocuments, reviewDocuments, inviteDocuments, savingDocuments, assetDocuments, decisionDocuments, reflectionDocuments] = await Promise.all([
     ownerDocuments(collections.requests, ownerId),
     ownerDocuments(collections.reviews, ownerId),
     ownerDocuments(collections.invites, ownerId),
     ownerDocuments(collections.saving, ownerId),
     ownerDocuments(collections.assets, ownerId),
     ownerDocuments(collections.decisions, ownerId),
+    ownerDocuments(collections.reflections, ownerId),
   ]);
 
   const reviewCounts = new Map<string, number>();
@@ -255,9 +248,13 @@ export async function loadCloudBaseData(ownerId: string): Promise<AppData> {
     requests,
     reviews: newestFirst(reviewDocuments.map(doc => normalizeReview(cleanDocument(doc) as unknown as Record<string, unknown>))) as unknown as Review[],
     invites: newestFirst(inviteDocuments.map(cleanDocument)) as unknown as ReviewInvite[],
-    decisions: newestFirst(decisionDocuments.map(cleanDocument)) as unknown as Decision[],
-    savingGoals: newestFirst(savingDocuments.map(cleanDocument)) as unknown as SavingGoal[],
-    assets: newestFirst(assetDocuments.map(cleanDocument)) as unknown as Asset[],
+    decisions: newestFirst(decisionDocuments.map(cleanDocument).map(document => normalizeDecision(document as Record<string, unknown>)).filter((decision): decision is Decision => decision !== null)),
+    savingGoals: newestFirst(savingDocuments.map(cleanDocument).map(document => normalizeSavingGoal(document as Record<string, unknown>))),
+    assets: newestFirst(assetDocuments.map(document => {
+      const asset=cleanDocument(document) as unknown as Asset;
+      return {...asset,archived_at:asset.archived_at??null};
+    })),
+    assetReflections: newestFirst(reflectionDocuments.map(document => normalizeAssetReflection(cleanDocument(document) as unknown as AssetReflection))),
   };
 }
 
@@ -270,12 +267,14 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     const reason = String(payload.reason ?? '').trim().slice(0, 500);
     const price = Number(payload.price);
     const concern = String(payload.concern ?? payload.similar_item ?? '').trim().slice(0, 200);
-    const typeRaw = String(payload.type ?? '').trim();
+    const suppliedType = String(payload.type ?? '').trim();
+    const legacyCategory = String(payload.category ?? '').trim();
     if (!name) throw new CloudBaseStoreError('请填写商品或课程名称', 400, 'name');
     if (!reason) throw new CloudBaseStoreError('请填写你为什么想要它', 400, 'reason');
     if (!Number.isFinite(price) || price < 0 || price > 99_999_999.99) throw new CloudBaseStoreError('请填写有效价格', 400, 'price');
     if (!concern) throw new CloudBaseStoreError('请填写或选择你最担心的问题', 400, 'concern');
-    if (!typeRaw || !WISH_TYPES.includes(typeRaw as typeof WISH_TYPES[number])) throw new CloudBaseStoreError('请选择类型', 400, 'type');
+    if ((!suppliedType && !legacyCategory) || (suppliedType && !isKnownWishType(suppliedType))) throw new CloudBaseStoreError('请选择类型', 400, 'type');
+    const typeRaw = canonicalWishType(suppliedType, legacyCategory);
 
     const id = crypto.randomUUID();
     const createdAt = now();
@@ -283,7 +282,7 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     if (images.length && !images.some(img => img.isCover)) images[0].isCover = true;
     const request: PurchaseRequest = {
       id, name, price, reason,
-      category: String(payload.category ?? ''),
+      category: typeToCategory(typeRaw),
       total_units: payload.total_units == null && payload.totalUnits == null ? null : Number(payload.total_units ?? payload.totalUnits),
       usage_frequency: payload.usage_frequency ? String(payload.usage_frequency) : payload.usageFrequency ? String(payload.usageFrequency) : null,
       expiry_date: payload.expiry_date ? String(payload.expiry_date) : payload.expiryDate ? String(payload.expiryDate) : null,
@@ -296,7 +295,7 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
       review_count: 0,
       revision: 1,
       sourceType: (payload.source_type ?? payload.sourceType ?? 'MANUAL') as PurchaseRequest['sourceType'],
-      type: typeRaw as PurchaseRequest['type'],
+      type: typeRaw,
       concern,
       brand: String(payload.brand ?? '').slice(0, 80),
       skuLabel: String(payload.sku_label ?? payload.skuLabel ?? '').slice(0, 120),
@@ -330,12 +329,22 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     if (typeof payload.price === 'number') patch.price = payload.price;
     if (typeof payload.reason === 'string') patch.reason = payload.reason.trim().slice(0, 500);
     if (typeof payload.concern === 'string') { patch.concern = payload.concern.trim().slice(0, 200); patch.similar_item = patch.concern; }
-    if (typeof payload.type === 'string') patch.type = payload.type;
+    if (typeof payload.type === 'string') {
+      if (!isKnownWishType(payload.type)) throw new CloudBaseStoreError('请选择类型', 400, 'type');
+      patch.type = canonicalWishType(payload.type);
+      patch.category = typeToCategory(patch.type as PurchaseRequest['type']);
+    } else if (typeof payload.category === 'string') {
+      patch.type = canonicalWishType(undefined, payload.category);
+      patch.category = typeToCategory(patch.type as PurchaseRequest['type']);
+    }
     if (typeof payload.brand === 'string') patch.brand = payload.brand.slice(0, 80);
     if (payload.skuLabel !== undefined || payload.sku_label !== undefined) patch.skuLabel = String(payload.skuLabel ?? payload.sku_label).slice(0, 120);
     if (typeof payload.details === 'string') patch.details = payload.details.slice(0, 2000);
     if (payload.productUrl !== undefined || payload.product_url !== undefined) patch.productUrl = payload.productUrl ?? payload.product_url;
     if (payload.sourcePlatform !== undefined || payload.source_platform !== undefined) patch.sourcePlatform = String(payload.sourcePlatform ?? payload.source_platform).slice(0, 40);
+    if (payload.totalUnits !== undefined || payload.total_units !== undefined) patch.total_units = payload.totalUnits ?? payload.total_units;
+    if (payload.usageFrequency !== undefined || payload.usage_frequency !== undefined) patch.usage_frequency = payload.usageFrequency ?? payload.usage_frequency;
+    if (payload.expiryDate !== undefined || payload.expiry_date !== undefined) patch.expiry_date = payload.expiryDate ?? payload.expiry_date;
     if (Array.isArray(payload.images)) {
       const images = (payload.images as Array<Record<string, unknown>>).slice(0, 6).map((img, index) => ({ id: String(img.id ?? crypto.randomUUID()), url: String(img.url ?? ''), sortOrder: Number(img.sortOrder ?? index), isCover: Boolean(img.isCover) }));
       if (images.length && !images.some(img => img.isCover)) images[0].isCover = true;
@@ -351,7 +360,7 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     if(!nextReason)throw new CloudBaseStoreError('请填写你为什么想要它',400,'reason');
     if(!Number.isFinite(nextPrice)||nextPrice<0||nextPrice>99_999_999.99)throw new CloudBaseStoreError('请填写有效价格',400,'price');
     if(!nextConcern)throw new CloudBaseStoreError('请填写或选择你最担心的问题',400,'concern');
-    if(!WISH_TYPES.includes(nextType as typeof WISH_TYPES[number]))throw new CloudBaseStoreError('请选择类型',400,'type');
+    if(!isKnownWishType(nextType))throw new CloudBaseStoreError('请选择类型',400,'type');
     patch.revision = currentRev + 1;
     patch.updatedAt = now();
     patch.similar_item = patch.concern ?? request.similar_item;
@@ -399,14 +408,14 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
 
     const requestId = document.request_id ? String(document.request_id) : null;
     const source = requestId ? await ownedDocument(collections.requests, requestId, ownerId) : null;
-    const type = source ? requestType(String(source.category)) : 'ITEM';
+    const type = source ? assetTypeForWish(source.type as PurchaseRequest['type'],String(source.category??'')) : 'ITEM';
     const assetId = requestId ? `asset-${requestId}` : `asset-${goalId}`;
     const asset: Asset = {
       id: assetId,
       name: String(document.name),
       type,
       purchase_price: Number(document.target),
-      total_units: source?.total_units == null ? null : Number(source.total_units),
+      total_units: type === 'EXPERIENCE' ? 1 : source?.total_units == null ? null : Number(source.total_units),
       used_units: 0,
       current_balance: type === 'STORED_VALUE' ? Number(document.target) : null,
       expiry_date: source?.expiry_date ? String(source.expiry_date) : null,
@@ -450,6 +459,23 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     return { ok: true, asset:{...cleanDocument(document),used_units:usage.used_units,usage_count:usage.usage_count,current_balance:usage.current_balance,last_used_at:today()} };
   }
 
+  if (body.action === 'add_asset_reflection') {
+    const assetId = String(body.assetId ?? '');
+    const document = await ownedDocument(collections.assets, assetId, ownerId);
+    if (!document) throw new CloudBaseStoreError('没有找到这个物资', 404);
+    let reflectionInput:ReturnType<typeof parseAssetReflectionPayload>;
+    try{reflectionInput=parseAssetReflectionPayload(body)}catch(error){if(error instanceof AssetRuleError)throw new CloudBaseStoreError(error.message,error.status);throw error}
+    const {feeling,rating,wouldBuyAgain,note,trigger}=reflectionInput;
+    const asset = cleanDocument(document) as unknown as Asset;
+    const createdAt=now();
+    const reflection:AssetReflection={id:crypto.randomUUID(),asset_id:assetId,asset_name:asset.name,asset_type:asset.type,feeling,rating,would_buy_again:wouldBuyAgain,note,trigger,usage_count:asset.usage_count,cost_per_use:costPerUse(asset),created_at:createdAt};
+    await saveDocument(collections.reflections, reflection.id, { ...reflection, owner_id: ownerId });
+    const archivedAt=trigger==='MANUAL' ? asset.archived_at??null : asset.archived_at??createdAt;
+    if(trigger!=='MANUAL')await db.collection(collections.assets).doc(assetId).update({archived_at:archivedAt});
+    await awardCloudBaseGrowth(ownerId,'asset_reflection',assetId,15);
+    return { reflection,asset:{...asset,archived_at:archivedAt} };
+  }
+
   if (body.action === 'save_decision_note') {
     const requestId = String(body.requestId ?? '');
     const request = await ownedDocument(collections.requests, requestId, ownerId);
@@ -479,11 +505,13 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
       await saveDocument(collections.saving, savingId, { owner_id: ownerId, request_id: requestId, name: String(source.name), target: Number(source.price), current: 0, weekly_plan: null, created_at: now() });
     }
     if (decision === 'BUY_NOW') {
-      const type = requestType(String(source.category));
+      const type = assetTypeForWish(source.type as PurchaseRequest['type'],String(source.category??''));
       const assetId = `asset-${requestId}`;
-      await saveDocument(collections.assets, assetId, { owner_id: ownerId, request_id: requestId, name: String(source.name), type, purchase_price: Number(source.price), total_units: source.total_units ?? null, used_units: 0, current_balance: type === 'STORED_VALUE' ? Number(source.price) : null, expiry_date: source.expiry_date ?? null, usage_count: 0, last_used_at: null, bloom_until: new Date(Date.now() + 20_000).toISOString(), created_at: now() });
+      await saveDocument(collections.assets, assetId, { owner_id: ownerId, request_id: requestId, name: String(source.name), type, purchase_price: Number(source.price), total_units: type === 'EXPERIENCE' ? 1 : source.total_units ?? null, used_units: 0, current_balance: type === 'STORED_VALUE' ? Number(source.price) : null, expiry_date: source.expiry_date ?? null, usage_count: 0, last_used_at: null, bloom_until: new Date(Date.now() + 20_000).toISOString(), created_at: now() });
     }
-    return { ok: true, target: decision === 'BUY_NOW' ? 'assets' : decision === 'SAVE_FIRST' ? 'saving' : 'wishes' };
+    const goal = decision === 'SAVE_FIRST' ? cleanDocument((await ownedDocument(collections.saving, `saving-${requestId}`, ownerId))!) : null;
+    const asset = decision === 'BUY_NOW' ? cleanDocument((await ownedDocument(collections.assets, `asset-${requestId}`, ownerId))!) : null;
+    return { ok: true, target: decision === 'BUY_NOW' ? 'assets' : decision === 'SAVE_FIRST' ? 'saving' : 'wishes', goal, asset };
   }
 
   throw new CloudBaseStoreError('不支持的操作');
