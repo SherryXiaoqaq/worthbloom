@@ -38,8 +38,18 @@ function assetState(asset:Asset, now:number):DeviceState {
   return {mode:'HEALTHY',title:asset.name,progress,flower_health:90,remaining,days_left:daysLeft,message:'Value grows in use',asset_id:asset.id};
 }
 
-export function deriveDeviceState(data:AppData, timestamp=Date.now()):DeviceState {
+export function deriveDeviceState(data:AppData, timestamp=Date.now(), focusRequestId?:string|null):DeviceState {
   const activeAssets=data.assets.filter(asset=>!asset.archived_at);
+  const focusedWish=focusRequestId?data.requests.find(item=>item.id===focusRequestId&&['REVIEWING','SAVING'].includes(item.status)):undefined;
+  const focusedGoal=focusedWish?.status==='SAVING'?data.savingGoals.find(item=>item.request_id===focusedWish.id):undefined;
+  if(focusedGoal) {
+    const progress=focusedGoal.target>0?clamp(focusedGoal.current/focusedGoal.target):0;
+    return {mode:'GROWING',title:focusedGoal.name,progress,flower_health:Math.round(65+progress*30),remaining:Math.max(0,focusedGoal.target-focusedGoal.current),days_left:null,message:'Getting closer',asset_id:null,request_id:focusedGoal.request_id};
+  }
+  if(focusedWish?.status==='REVIEWING') {
+    const replies=data.reviews.filter(item=>item.request_id===focusedWish.id).length;
+    return {mode:'WAITING',title:focusedWish.name,progress:clamp(replies/3),flower_health:78,remaining:Math.max(0,3-replies),days_left:null,message:replies?`${replies} replies received`:'Waiting for different views',asset_id:null,request_id:focusedWish.id};
+  }
   const blooming=activeAssets.find(asset=>asset.bloom_until && new Date(asset.bloom_until).getTime()>timestamp);
   if(blooming)return assetState(blooming,timestamp);
   const recovering=activeAssets.find(asset=>asset.recovering_until && new Date(asset.recovering_until).getTime()>timestamp);
@@ -48,14 +58,14 @@ export function deriveDeviceState(data:AppData, timestamp=Date.now()):DeviceStat
   const goal=data.savingGoals[0];
   if(goal) {
     const progress=goal.target>0?clamp(goal.current/goal.target):0;
-    return {mode:'GROWING',title:goal.name,progress,flower_health:Math.round(65+progress*30),remaining:Math.max(0,goal.target-goal.current),days_left:null,message:'Getting closer',asset_id:null};
+    return {mode:'GROWING',title:goal.name,progress,flower_health:Math.round(65+progress*30),remaining:Math.max(0,goal.target-goal.current),days_left:null,message:'Getting closer',asset_id:null,request_id:goal.request_id};
   }
 
   const wish=data.requests.find(item=>item.status==='REVIEWING');
   if(wish) {
     const replies=data.reviews.filter(item=>item.request_id===wish.id).length;
     const remaining=Math.max(0,3-replies);
-    return {mode:'WAITING',title:wish.name,progress:clamp(replies/3),flower_health:78,remaining,days_left:null,message:replies?`${replies} replies received`:'Waiting for different views',asset_id:null};
+    return {mode:'WAITING',title:wish.name,progress:clamp(replies/3),flower_health:78,remaining,days_left:null,message:replies?`${replies} replies received`:'Waiting for different views',asset_id:null,request_id:wish.id};
   }
 
   if(activeAssets[0])return assetState(activeAssets[0],timestamp);

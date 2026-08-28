@@ -271,4 +271,22 @@ export interface DeviceState {
   days_left:number|null;
   message:string;
   asset_id:string|null;
+  request_id?:string|null;
+}
+export interface ShoppingProfileItem {
+  id:string;
+  name:string;
+  type:WishType;
+  category:string;
+  price:number|null;
+  sourceImageIndex:number;
+  confidence:number;
+}
+export interface ShoppingProfile {
+  userId:string;
+  source:'REGISTER_SCREENSHOTS';
+  consentedAt:string;
+  items:ShoppingProfileItem[];
+  categoryCounts:Record<string,number>;
+  updatedAt:string;
 }

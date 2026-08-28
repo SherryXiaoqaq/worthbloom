@@ -1,6 +1,6 @@
 import 'server-only';
 
-import type { AppData, Asset, AssetReflection, Decision, GrowthAccount, GrowthLedgerEntry, InboxPage, PurchaseRequest, Review, ReviewChoice, ReviewInvite, SavingGoal, UserProfile } from '@/lib/types';
+import type { AppData, Asset, AssetReflection, Decision, GrowthAccount, GrowthLedgerEntry, InboxPage, PurchaseRequest, Review, ReviewChoice, ReviewInvite, SavingGoal, ShoppingProfile, ShoppingProfileItem, UserProfile } from '@/lib/types';
 import { applyAssetUsage, assetTypeForWish, AssetRuleError, costPerUse, normalizeAssetReflection, parseAssetPayload, parseAssetReflectionPayload } from '@/lib/asset-rules';
 import { getCloudBaseDb } from './cloudbase-http-db';
 import { canonicalWishType, isKnownWishType, normalizeDecision, normalizeSavingGoal, normalizeWish, normalizeReview, buildReviewContext, typeToCategory } from '@/lib/wish-compat';
@@ -27,6 +27,7 @@ const collections = {
   agentReports: 'agent_reports',
   profiles: 'user_profiles',
   inboxStates: 'inbox_states',
+  shoppingProfiles: 'shopping_profiles',
 } as const;
 const now = () => new Date().toISOString();
 const today = () => new Date().toISOString().slice(0, 10);
@@ -45,6 +46,11 @@ function cleanDocument(document: CloudDocument) {
   delete rest._id;
   delete rest.owner_id;
   return { ...rest, id: String(document.id || document._id || '') };
+}
+
+function writableDocumentFields(document:CloudDocument|undefined){
+  if(!document)return{};
+  return Object.fromEntries(Object.entries(document).filter(([key])=>key!=='_id'&&key!=='id'));
 }
 
 function newestFirst<T>(items: T[]) {
@@ -129,6 +135,7 @@ export async function saveCloudBaseProfile(ownerId: string, patch: Partial<UserP
   const createdAt = current.createdAt;
   const updatedAt = now();
   await saveDocument(collections.profiles, ownerId, {
+    ...writableDocumentFields(existing),
     owner_id: ownerId,
     user_id: ownerId,
     nickname,
@@ -142,11 +149,33 @@ export async function saveCloudBaseProfile(ownerId: string, patch: Partial<UserP
   return { ...current, nickname, bio, shareIdentityDefault, updatedAt };
 }
 
+export async function loadCloudBaseDeviceFocus(ownerId:string) {
+  const document=(await getCloudBaseDb().collection(collections.profiles).doc(ownerId).get()).data?.[0] as CloudDocument|undefined;
+  return document?.device_focus_request_id?String(document.device_focus_request_id):null;
+}
+
+export async function saveCloudBaseDeviceFocus(ownerId:string,requestId:string|null) {
+  if(requestId){const request=await ownedDocument(collections.requests,requestId,ownerId);if(!request||!['REVIEWING','SAVING'].includes(String(request.status)))throw new CloudBaseStoreError('这个心愿当前不能同步到电子花',409)}
+  const existing=(await getCloudBaseDb().collection(collections.profiles).doc(ownerId).get()).data?.[0] as CloudDocument|undefined;
+  await saveDocument(collections.profiles,ownerId,{...writableDocumentFields(existing),owner_id:ownerId,device_focus_request_id:requestId,updated_at:now()});
+  return{focusRequestId:requestId};
+}
+
+export async function saveCloudBaseShoppingProfile(ownerId:string,items:ShoppingProfileItem[]){
+  const timestamp=now();
+  const categoryCounts=items.reduce<Record<string,number>>((counts,item)=>{counts[item.category]=(counts[item.category]??0)+1;return counts},{});
+  const profile:ShoppingProfile={userId:ownerId,source:'REGISTER_SCREENSHOTS',consentedAt:timestamp,items,categoryCounts,updatedAt:timestamp};
+  await saveDocument(collections.shoppingProfiles,ownerId,{owner_id:ownerId,user_id:ownerId,source:profile.source,consented_at:timestamp,items,category_counts:categoryCounts,updated_at:timestamp});
+  await awardCloudBaseGrowth(ownerId,'shopping_profile_import',ownerId,20);
+  return profile;
+}
+
 export async function saveCloudBaseAvatar(ownerId: string, avatarUrl: string | null, fallbackNickname?: string | null) {
   const existing = (await getCloudBaseDb().collection(collections.profiles).doc(ownerId).get()).data?.[0] as CloudDocument | undefined;
   const current = profileFromDocument(ownerId, existing, fallbackNickname);
   const updatedAt = now();
   await saveDocument(collections.profiles, ownerId, {
+    ...writableDocumentFields(existing),
     owner_id: ownerId,
     user_id: ownerId,
     nickname: current.nickname,

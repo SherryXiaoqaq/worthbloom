@@ -57,6 +57,12 @@ async function identifyLink(url: string) {
   catch(error){return{page:null,url,sourceWarning:error instanceof Error?error.message:'商品页面无法直接读取'};}
 }
 
+function attachPageImage(snapshot:ProductSnapshot,page:{imageUrl?:string|null}|null){
+  if(!page?.imageUrl)return snapshot;
+  const image={id:crypto.randomUUID(),url:page.imageUrl,sortOrder:0,isCover:true};
+  return{...snapshot,image_url:page.imageUrl,images:[image]};
+}
+
 async function identifyWithAi(url: string | null, page: { promptText: string } | null, image?: { base64: string; mimeType: string }, rawText?: string, hint?: string) {
   const schemaExample = {
     name: '商品或服务名称，无法确认则为 null', price: '人民币数字，无法确认则为 null',
@@ -99,12 +105,10 @@ export async function POST(request: Request) {
           return Response.json({ status: 'URL_SELECTION_REQUIRED', urlCandidates: candidates });
         }
         const selectedUrl = body.selectedUrl ?? candidates[0];
-        if (!isAiConfigured()) {
-          return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot: fallbackSnapshot(raw, '', false), fallback: true });
-        }
+        if (!isAiConfigured()) {const {page,sourceWarning}=await identifyLink(selectedUrl);return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot: attachPageImage(fallbackSnapshot(raw, '', false),page), fallback: true,sourceWarning });}
         try {
           const { page,sourceWarning } = await identifyLink(selectedUrl);
-          const snapshot = await identifyWithAi(selectedUrl, page, undefined, raw);
+          const snapshot = attachPageImage(await identifyWithAi(selectedUrl, page, undefined, raw),page);
           return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot, fallback: false, sourceWarning });
         } catch {
           return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot: fallbackSnapshot(raw, '', false), fallback: true });
@@ -145,10 +149,10 @@ export async function POST(request: Request) {
       if (candidates.length === 0) return fail('未识别到商品链接', 422, 'NO_URL_FOUND');
       if (candidates.length > 1) return Response.json({ status: 'URL_SELECTION_REQUIRED', urlCandidates: candidates });
       const selectedUrl = candidates[0];
-      if (!isAiConfigured()) return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot: fallbackSnapshot(raw, hint, false), fallback: true });
+      if (!isAiConfigured()) {const {page,sourceWarning}=await identifyLink(selectedUrl);return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot: attachPageImage(fallbackSnapshot(raw, hint, false),page), fallback: true,sourceWarning });}
       try {
         const { page,sourceWarning } = await identifyLink(selectedUrl);
-        const snapshot = await identifyWithAi(selectedUrl, page, undefined, raw, hint);
+        const snapshot = attachPageImage(await identifyWithAi(selectedUrl, page, undefined, raw, hint),page);
         return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot, fallback: false, sourceWarning });
       } catch {
         return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: candidates, selectedUrl, snapshot: fallbackSnapshot(raw, hint, false), fallback: true });

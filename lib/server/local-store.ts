@@ -1,4 +1,4 @@
-import type { AppData, Asset, AssetReflection, Decision, GrowthAccount, GrowthLedgerEntry, InboxPage, PurchaseRequest, Review, ReviewChoice, ReviewInvite, UserProfile } from '@/lib/types';
+import type { AppData, Asset, AssetReflection, Decision, GrowthAccount, GrowthLedgerEntry, InboxPage, PurchaseRequest, Review, ReviewChoice, ReviewInvite, ShoppingProfile, ShoppingProfileItem, UserProfile } from '@/lib/types';
 import { applyAssetUsage, assetTypeForRequest, AssetRuleError, costPerUse, normalizeAssetReflection, parseAssetPayload, parseAssetReflectionPayload } from '@/lib/asset-rules';
 import { isLocalPreviewHostname } from '@/lib/server/network';
 import { canonicalWishType, isKnownWishType, normalizeDecision, normalizeSavingGoal, normalizeWish, normalizeReview, typeToCategory } from '@/lib/wish-compat';
@@ -10,6 +10,8 @@ declare global {
   var __worthBloomLocalGrowthAccounts: Record<string, GrowthAccount> | undefined;
   var __worthBloomLocalGrowthLedger: Record<string, GrowthLedgerEntry[]> | undefined;
   var __worthBloomLocalInboxReads: Record<string, string[]> | undefined;
+  var __worthBloomDeviceFocus: Record<string, string | null> | undefined;
+  var __worthBloomShoppingProfiles: Record<string, ShoppingProfile> | undefined;
 }
 
 export class LocalStoreError extends Error {
@@ -81,6 +83,8 @@ function localProfiles(){globalThis.__worthBloomLocalProfiles??={};return global
 function localGrowthAccounts(){globalThis.__worthBloomLocalGrowthAccounts??={};return globalThis.__worthBloomLocalGrowthAccounts}
 function localGrowthLedger(){globalThis.__worthBloomLocalGrowthLedger??={};return globalThis.__worthBloomLocalGrowthLedger}
 function localInboxReads(){globalThis.__worthBloomLocalInboxReads??={};return globalThis.__worthBloomLocalInboxReads}
+function localDeviceFocus(){globalThis.__worthBloomDeviceFocus??={};return globalThis.__worthBloomDeviceFocus}
+function localShoppingProfiles(){globalThis.__worthBloomShoppingProfiles??={};return globalThis.__worthBloomShoppingProfiles}
 
 function awardLocalGrowth(userId:string,actionType:string,referenceId:string,delta:number){
   const ledger=localGrowthLedger();const entries=ledger[userId]??[];const idempotencyKey=`${actionType}:${referenceId}`;
@@ -101,6 +105,9 @@ export function saveLocalAvatar(userId:string,avatarUrl:string|null,fallbackNick
 export function getLocalGrowth(userId:string){const account=localGrowthAccounts()[userId]??{userId,points:0,level:1 as const,nextLevelPoints:100};return{account:structuredClone(account),entries:structuredClone(localGrowthLedger()[userId]??[])}}
 export function getLocalInbox(userId:string,cursor='0',limit=20):InboxPage{const data=store();const readIds=new Set(localInboxReads()[userId]??[]);const reviews=[...data.reviews].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));const offset=Math.max(0,Number.parseInt(cursor,10)||0);const safeLimit=Math.max(1,Math.min(50,limit));const page=reviews.slice(offset,offset+safeLimit);return{items:page.map(review=>({review:normalizeReview(review as unknown as Record<string,unknown>),requestName:data.requests.find(request=>request.id===review.request_id)?.name||'已归档心愿',isRead:readIds.has(review.id)})),nextCursor:offset+safeLimit<reviews.length?String(offset+safeLimit):null,unreadCount:reviews.filter(review=>!readIds.has(review.id)).length}}
 export function markLocalInboxRead(userId:string,reviewIds:string[]){const allowed=new Set(store().reviews.map(review=>review.id));const merged=[...new Set([...(localInboxReads()[userId]??[]),...reviewIds.filter(id=>allowed.has(id))])].slice(-1000);localInboxReads()[userId]=merged;return{ok:true,readReviewIds:merged}}
+export function getLocalDeviceFocus(userId:string){return localDeviceFocus()[userId]??null}
+export function setLocalDeviceFocus(userId:string,requestId:string|null){if(requestId&&!store().requests.some(request=>request.id===requestId&&['REVIEWING','SAVING'].includes(request.status)))throw new LocalStoreError('这个心愿当前不能同步到电子花',409);localDeviceFocus()[userId]=requestId;return{focusRequestId:requestId}}
+export function saveLocalShoppingProfile(userId:string,items:ShoppingProfileItem[]){const timestamp=now();const categoryCounts=items.reduce<Record<string,number>>((counts,item)=>{counts[item.category]=(counts[item.category]??0)+1;return counts},{});const profile:ShoppingProfile={userId,source:'REGISTER_SCREENSHOTS',consentedAt:timestamp,items,categoryCounts,updatedAt:timestamp};localShoppingProfiles()[userId]=profile;awardLocalGrowth(userId,'shopping_profile_import',userId,20);return structuredClone(profile)}
 
 export function isLocalPreview(request:Request) {
   // When Next.js listens on 0.0.0.0 it may normalize request.url to the

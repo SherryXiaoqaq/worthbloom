@@ -108,6 +108,12 @@ export async function readProductPage(rawUrl: string) {
       const title = metaContent(html, 'og:title') || decodeEntities(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() || '');
       const description = metaContent(html, 'og:description') || metaContent(html, 'description');
       const price = metaContent(html, 'product:price:amount') || metaContent(html, 'og:price:amount');
+      const rawImageUrl = metaContent(html, 'og:image') || metaContent(html, 'twitter:image');
+      let imageUrl: string | null = null;
+      if (rawImageUrl) {
+        try { imageUrl = assertPublicProductUrl(new URL(rawImageUrl, url).toString()).toString(); }
+        catch { imageUrl = null; }
+      }
       const jsonLd = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)]
         .map(match => match[1].trim())
         .join('\n')
@@ -134,7 +140,7 @@ export async function readProductPage(rawUrl: string) {
         hydrationData && `页面内嵌商品数据：${hydrationData}`,
         visibleText && `页面正文：${visibleText}`,
       ].filter(Boolean).join('\n').slice(0, MAX_PROMPT_CHARS);
-      return { url: url.toString(), promptText, title };
+      return { url: url.toString(), promptText, title, imageUrl };
     }
     throw new ProductSourceError('商品页面无法读取', 422);
   } catch (error) {

@@ -15,20 +15,13 @@ constexpr int WB_LCD_RESET = 14;
 // The onboard BOOT key is also a normal active-low button after startup.
 constexpr int WB_ACTION_BUTTON = 0;
 
-// Optional expansion pins. Leave every feature disabled for the first boot.
-#define WB_ENABLE_NEOPIXEL 0
-constexpr int WB_NEOPIXEL_PIN = 15;
-constexpr int WB_NEOPIXEL_COUNT = 8;
-constexpr int WB_NEOPIXEL_MAX_BRIGHTNESS = 72;
-
 #define WB_ENABLE_SERVO 0
 constexpr int WB_SERVO_PIN = 16;
 constexpr int WB_SERVO_CHANNEL = 7;
-
-// GPIO4 controls the board's MOSFET1 solder pads. Do not connect a bare motor
-// directly to a GPIO. Keep disabled until the motor wiring step is complete.
-#define WB_ENABLE_VIBRATION 0
-constexpr int WB_VIBRATION_PIN = 4;
+// Calibrate these two values to the safe mechanical travel of the flower.
+// A server progress of 0.0 uses CLOSED; 1.0 uses OPEN.
+constexpr int WB_SERVO_CLOSED_ANGLE = 30;
+constexpr int WB_SERVO_OPEN_ANGLE = 145;
 
 constexpr unsigned long WB_RENDER_INTERVAL_MS = 45;
 constexpr unsigned long WB_MOCK_STATE_INTERVAL_MS = 7000;

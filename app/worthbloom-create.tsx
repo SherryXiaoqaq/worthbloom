@@ -144,6 +144,7 @@ export default function CreateWishSheet({ open, onClose, onCreated, editRequest,
           totalUnits:result.snapshot!.totalUnits==null?prev.totalUnits:String(result.snapshot!.totalUnits),
           usageFrequency:result.snapshot!.usageFrequency??prev.usageFrequency,
           expiryDate:result.snapshot!.expiryDate??prev.expiryDate,
+          images:prev.images.length?prev.images:(result.snapshot!.images??[]),
         }));
       }
       setStep('confirm');
@@ -305,9 +306,10 @@ export default function CreateWishSheet({ open, onClose, onCreated, editRequest,
           {draft.sourceType === 'LINK' && <label style={{ marginTop: 8 }}><span>商品链接</span><input value={draft.productUrl} onChange={event => setDraft(prev => ({ ...prev, productUrl: event.target.value }))} placeholder="已从导入识别" /></label>}
           <label style={{ marginTop: 8 }}><span>来源平台</span><input maxLength={40} value={draft.sourcePlatform} onChange={event => setDraft(prev => ({ ...prev, sourcePlatform: event.target.value }))} placeholder="选填，如淘宝 / 京东" /></label>
         </details>
-        {draft.images.length > 0 && (
-          <div style={{ marginTop: 10 }}>
-            <span style={{ fontSize: 13, color: '#646a73' }}>图片（{draft.images.length}）</span>
+        <div style={{ marginTop: 10 }}>
+            <span style={{ fontSize: 13, color: '#646a73' }}>图片（选填，{draft.images.length}/6）</span>
+            <label className={styles.upload} style={{minHeight:72,marginTop:6}}><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event:ChangeEvent<HTMLInputElement>)=>{for(const file of Array.from(event.target.files??[]))addImage(file);event.target.value=''}}/><Icon name="camera" size={22}/><b>{draft.images.length?'继续添加':'添加商品图或实拍图'}</b><span>没有图片也可以继续，系统会显示对应类型图标</span></label>
+            {draft.images.length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginTop: 6 }}>
               {draft.images.map(img => (
                 <div key={img.id} style={{ position: 'relative' }}>
@@ -317,8 +319,8 @@ export default function CreateWishSheet({ open, onClose, onCreated, editRequest,
                 </div>
               ))}
             </div>
+            )}
           </div>
-        )}
         <button className={styles.primary}>继续</button>
       </form>
     )}

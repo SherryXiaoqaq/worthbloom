@@ -112,7 +112,7 @@ ZHIPU_TEXT_FALLBACK_MODEL=glm-4-flash-250414
 - CloudBase 环境 ID 与地域
 - Publishable Key
 - 服务端 API Key
-- 7 个文档数据库集合
+- 17 个文档数据库集合
 - 邮箱登录与安全来源
 
 完整步骤见 [`CLOUDBASE_SETUP.md`](CLOUDBASE_SETUP.md)。
