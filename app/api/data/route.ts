@@ -105,7 +105,7 @@ export async function POST(request: Request) {
         const imgStmts = (payload.images as Array<Record<string, unknown>>).slice(0, 6).map((img, index) => db.prepare(`INSERT INTO wish_images (id,request_id,url,sort_order,is_cover) VALUES (?,?,?,?,?)`).bind(String(img.id ?? crypto.randomUUID()), id, String(img.url ?? ''), Number(img.sortOrder ?? index), img.isCover ? 1 : index === 0 ? 1 : 0));
         await db.batch(imgStmts);
       }
-      const inviteStatements = [1, 2, 3].map(n => db.prepare(`INSERT INTO review_invites (id,request_id,token,label) VALUES (?,?,?,?)`).bind(crypto.randomUUID(), id, inviteToken(), `朋友 ${n}`));
+      const inviteStatements = [db.prepare(`INSERT INTO review_invites (id,request_id,token,label) VALUES (?,?,?,?)`).bind(crypto.randomUUID(), id, inviteToken(), '群聊邀请')];
       await db.batch(inviteStatements);
       const row = (await db.prepare(`SELECT p.*, 0 AS review_count FROM purchase_requests p WHERE id = ?`).bind(id).first<Record<string, unknown>>())!;
       row.images = (payload.images as Array<Record<string, unknown>> | undefined)?.slice(0, 6).map((img, index) => ({ id: String(img.id ?? index), url: String(img.url ?? ''), sortOrder: Number(img.sortOrder ?? index), isCover: Boolean(img.isCover) })) ?? [];
@@ -165,14 +165,15 @@ export async function POST(request: Request) {
       const requestId = String(body.requestId ?? '');
       const source = await db.prepare(`SELECT id,status FROM purchase_requests WHERE id = ?`).bind(requestId).first<{id:string;status:string}>();
       if (!source || source.status !== 'REVIEWING') return Response.json({ error: '这个心愿已经结束征集' }, { status: 409 });
-      const count = await db.prepare(`SELECT COUNT(*) AS total FROM review_invites WHERE request_id = ?`).bind(requestId).first<{total:number}>();
+      const existing = await db.prepare(`SELECT * FROM review_invites WHERE request_id = ? AND revoked = 0 ORDER BY created_at LIMIT 1`).bind(requestId).first();
+      if (existing) return Response.json({ invite: existing });
       const id = crypto.randomUUID();
-      await db.prepare(`INSERT INTO review_invites (id,request_id,token,label) VALUES (?,?,?,?)`).bind(id, requestId, inviteToken(), `朋友 ${(count?.total ?? 0) + 1}`).run();
+      await db.prepare(`INSERT INTO review_invites (id,request_id,token,label) VALUES (?,?,?,?)`).bind(id, requestId, inviteToken(), '群聊邀请').run();
       return Response.json({ invite: await db.prepare(`SELECT * FROM review_invites WHERE id = ?`).bind(id).first() }, { status: 201 });
     }
 
     if (body.action === 'revoke_invite') {
-      await db.prepare(`UPDATE review_invites SET revoked = 1 WHERE id = ? AND used_at IS NULL`).bind(String(body.inviteId ?? '')).run();
+      await db.prepare(`UPDATE review_invites SET revoked = 1 WHERE id = ?`).bind(String(body.inviteId ?? '')).run();
       return Response.json({ ok: true });
     }
 
@@ -266,7 +267,7 @@ export async function POST(request: Request) {
       const statements = [
         db.prepare(`UPDATE purchase_requests SET status = ? WHERE id = ? AND status = 'REVIEWING'`).bind(status, requestId),
         db.prepare(`INSERT INTO final_decisions (request_id,decision) VALUES (?,?) ON CONFLICT(request_id) DO UPDATE SET decision=excluded.decision, decided_at=CURRENT_TIMESTAMP`).bind(requestId, decision),
-        db.prepare(`UPDATE review_invites SET revoked = 1 WHERE request_id = ? AND used_at IS NULL`).bind(requestId),
+        db.prepare(`UPDATE review_invites SET revoked = 1 WHERE request_id = ?`).bind(requestId),
       ];
       const note = String(body.note ?? '').trim().slice(0, 2000);
       if (note) statements.push(db.prepare(`UPDATE purchase_requests SET decision_note = ? WHERE id = ?`).bind(note, requestId));

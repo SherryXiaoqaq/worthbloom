@@ -2,13 +2,13 @@
 
 import { FormEvent, useMemo, useRef, useState } from 'react';
 import { clearStoredSession } from '@/lib/cloudbase/client';
-import type { AppData, Asset, AssetReflection, AssetReflectionFeeling, Decision, DeviceState, GrowthAccount, GrowthLedgerEntry, InboxItem, PurchaseRequest, Review, ReviewChoice, SavingGoal, UserProfile } from '@/lib/types';
+import type { AppData, Asset, AssetReflection, AssetReflectionFeeling, Decision, DeviceState, GrowthAccount, GrowthLedgerEntry, InboxItem, PurchaseRequest, Review, ReviewChoice, ReviewInvite, SavingGoal, UserProfile } from '@/lib/types';
 import { assetFinished, costPerUse, isAssetExpired, remainingUnits } from '@/lib/asset-rules';
 import { typeToCategory } from '@/lib/wish-compat';
 import { AgentPanel } from './agent-panel';
 import styles from './worthbloom-v2.module.css';
 
-export type View = 'garden'|'profile'|'room'|'wishes'|'decisions'|'inbox'|'device'|'savings'|'assets';
+export type View = 'garden'|'profile'|'room'|'wishes'|'decisions'|'inbox'|'device'|'agent'|'savings'|'assets';
 
 type IconName='garden'|'plus'|'user'|'bell'|'chevron'|'back'|'flower'|'fruit'|'wish'|'check'|'reply'|'shield'|'help'|'device'|'sort'|'external'|'sparkle'|'share'|'settings'|'wallet'|'edit'|'camera'|'close';
 
@@ -41,10 +41,12 @@ export function Icon({name,size=22}:{name:IconName;size?:number}){
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
 
-export function BottomNav({view,onRoot,onCreate}:{view:View;onRoot:(view:'garden'|'profile')=>void;onCreate:()=>void}){
+export function BottomNav({view,onRoot,onCreate,onAgent,onAssets}:{view:View;onRoot:(view:'garden'|'profile')=>void;onCreate:()=>void;onAgent:()=>void;onAssets:()=>void}){
   return <nav className={styles.bottomNav} aria-label="主导航">
     <button className={view==='garden'?styles.navActive:''} onClick={()=>onRoot('garden')}><Icon name="garden"/><span>花园</span></button>
+    <button className={view==='agent'?styles.navActive:''} onClick={onAgent}><Icon name="sparkle"/><span>AI 对话</span></button>
     <button className={styles.navCreate} onClick={onCreate} aria-label="种心愿"><span><Icon name="plus" size={25}/></span><b>种心愿</b></button>
+    <button className={view==='assets'?styles.navActive:''} onClick={onAssets}><Icon name="fruit"/><span>我的果实</span></button>
     <button className={view==='profile'?styles.navActive:''} onClick={()=>onRoot('profile')}><Icon name="user"/><span>我的</span></button>
   </nav>;
 }
@@ -64,7 +66,6 @@ export function deriveDeviceSummary(data:AppData):DeviceState{
   const activeAssets=(data.assets??[]).filter(asset=>!asset.archived_at);
   const savingGoals=data.savingGoals??[];
   const requests=data.requests??[];
-  const invites=data.invites??[];
   const now=Date.now();
   const assetState=(asset:Asset):DeviceState=>{
     const remaining=asset.type==='STORED_VALUE'?Number(asset.current_balance??0):remainingUnits(asset);
@@ -88,7 +89,7 @@ export function deriveDeviceSummary(data:AppData):DeviceState{
   const goal=savingGoals[0];
   if(goal){const progress=goal.target?Math.min(1,goal.current/goal.target):0;return{mode:'GROWING',title:goal.name,progress,flower_health:Math.round(65+progress*30),remaining:Math.max(0,goal.target-goal.current),days_left:null,message:'正在靠近目标',asset_id:null}}
   const active=requests.find(request=>request.status==='REVIEWING');
-  if(active){const requestInvites=invites.filter(invite=>invite.request_id===active.id&&!invite.revoked);const replies=requestInvites.filter(invite=>invite.used_at).length;return{mode:'WAITING',title:active.name,progress:requestInvites.length?replies/requestInvites.length:0,flower_health:78,remaining:Math.max(0,requestInvites.length-replies),days_left:null,message:active.review_count?'回信已到，等你决定':'等待不同视角',asset_id:null}}
+  if(active){const replies=data.reviews.filter(review=>review.request_id===active.id).length;return{mode:'WAITING',title:active.name,progress:Math.min(1,replies/3),flower_health:78,remaining:Math.max(0,3-replies),days_left:null,message:replies?'回信已到，等你决定':'等待不同视角',asset_id:null}}
   if(activeAssets[0])return assetState(activeAssets[0]);
   return{mode:'SEED',title:'种下第一个心愿',progress:.06,flower_health:72,remaining:null,days_left:null,message:'还没有正在推进的心愿',asset_id:null};
 }
@@ -136,6 +137,17 @@ export function GardenView({data,unreadReviews,unreadCount,onNavigate,onOpen,onI
       {!decided.length&&<button className={styles.emptyAction} onClick={()=>onNavigate('wishes')}><Icon name="check"/><span><b>还没有完成决定</b><small>先从一个正在推进的心愿开始</small></span><Icon name="chevron"/></button>}
     </section>
     <div className={styles.deviceAfterTasks}><DeviceStrip state={device} onOpen={()=>onNavigate('device')}/></div>
+  </section>;
+}
+
+export function AgentHubView({data,onBack}:{data:AppData;onBack:()=>void}){
+  const wishes=data.requests.filter(request=>request.status==='REVIEWING');
+  const [selectedId,setSelectedId]=useState(wishes[0]?.id||'');
+  const selected=wishes.find(request=>request.id===selectedId)||wishes[0];
+  return <section className={styles.subPage}><PageHeader title="AI 对话" onBack={onBack}/>
+    <aside className={styles.deviceIntro}><span className={styles.deviceIntroIcon}><Icon name="sparkle" size={22}/></span><div><h2>先问问自己</h2><p>AI 会陪你把想要、担心和现实条件理一遍，最后的决定仍然由你完成。</p><small>它提供整理和提问，不会替你下结论。</small></div></aside>
+    {wishes.length>1&&<section className={styles.agentWishPicker}><h2>选择要聊的心愿</h2><div>{wishes.map(request=><button key={request.id} className={selected?.id===request.id?styles.agentWishActive:''} onClick={()=>setSelectedId(request.id)}><span>{request.name}</span><small>¥{request.price.toLocaleString()}</small></button>)}</div></section>}
+    {selected?<AgentPanel requestId={selected.id} revision={selected.revision??1}/>:<div className={styles.emptyAction}><Icon name="sparkle"/><span><b>还没有正在征集意见的心愿</b><small>先种下一个心愿，再来和 AI 聊聊。</small></span></div>}
   </section>;
 }
 
@@ -348,7 +360,19 @@ function SavingControl({goal,onAdd}:{goal:SavingGoal;onAdd:(amount:number)=>Prom
   return <form className={styles.savingControl} onSubmit={submit}><div><span>{goal.name||'未命名的存钱目标'}</span><b>¥{goal.current.toLocaleString()} / ¥{goal.target.toLocaleString()}</b></div><div className={styles.largeProgress}><i style={{width:`${goal.target?Math.min(100,goal.current/goal.target*100):0}%`}}/></div><div className={styles.savingRow}><label>¥<input aria-label={`为「${goal.name||'存钱目标'}」存入金额`} type="number" min="1" value={amount} onChange={event=>setAmount(event.target.value)}/></label><button disabled={busy}>{busy?'存入中…':'继续存钱'}</button></div>{note&&<small>{note}</small>}</form>;
 }
 
-export function WishRoom({data,request,busy,message,onBack,onInvite,onDecide,onAddSaving,onDecisionNote,onEdit}:{data:AppData;request:PurchaseRequest;busy:string;message:string;onBack:()=>void;onInvite:()=>void;onDecide:(choice:ReviewChoice)=>void;onAddSaving:(goalId:string,amount:number)=>Promise<void>;onDecisionNote:(note:string)=>void;onEdit?:()=>void}){
+function InvitePanel({request,invites,busy,onInvite,onCopyInvite}:{request:PurchaseRequest;invites:ReviewInvite[];busy:string;onInvite:()=>void;onCopyInvite:(invite:ReviewInvite)=>Promise<void>}){
+  const related=invites.filter(invite=>invite.request_id===request.id&&!invite.revoked);
+  const invite=related[0];
+  const replyCount=request.review_count??0;
+  return <section className={styles.invitePanel}>
+    <header><div><h2>分享到群聊</h2><p>一个链接可以收集多份独立回信。朋友不需要登录，也看不到其他人的回答。</p></div></header>
+    {!related.length&&<div className={styles.inviteEmpty}><p>还没有邀请链接，先生成一张发给朋友吧。</p><button type="button" onClick={onInvite} disabled={Boolean(busy)}>{busy==='invite'?'生成中…':'生成邀请链接'}</button></div>}
+    {invite&&<div className={styles.inviteLinks}><div className={styles.inviteLinkRow}><span className={styles.invitePerson}><b>群聊邀请</b><small>{replyCount?`已收到 ${replyCount} 份回信`:'等待第一份回信'}</small></span><button type="button" onClick={()=>void onCopyInvite(invite)} disabled={busy===`copy:${invite.id}`}>{busy===`copy:${invite.id}`?'复制中…':'复制邀请'}</button></div></div>}
+    <small>同一个链接可以由多人填写；心愿完成决定后，链接会自动停止收集。本地开发时地址会显示 localhost，正式部署后会自动使用部署域名。</small>
+  </section>;
+}
+
+export function WishRoom({data,request,busy,message,onBack,onInvite,onCopyInvite,onDecide,onAddSaving,onDecisionNote,onEdit}:{data:AppData;request:PurchaseRequest;busy:string;message:string;onBack:()=>void;onInvite:()=>void;onCopyInvite:(invite:ReviewInvite)=>Promise<void>;onDecide:(choice:ReviewChoice)=>void;onAddSaving:(goalId:string,amount:number)=>Promise<void>;onDecisionNote:(note:string)=>void;onEdit?:()=>void}){
   const reviews=data.reviews.filter(review=>review.request_id===request.id);const decision=data.decisions.find(item=>item.request_id===request.id);const goal=data.savingGoals.find(item=>item.request_id===request.id);const active=request.status==='REVIEWING';
   const [note,setNote]=useState(request.decision_note||'');
   const images=request.images??[];const [imgIndex,setImgIndex]=useState(0);const clampIndex=(n:number)=>Math.max(0,Math.min(n,Math.max(0,images.length-1)));
@@ -362,7 +386,7 @@ export function WishRoom({data,request,busy,message,onBack,onInvite,onDecide,onA
       <details className={styles.detailFold}><summary>详情</summary><div className={styles.detailFoldGrid}><span>品牌：{request.brand||'—'}</span><span>规格：{request.skuLabel||'—'}</span><span>来源：{request.sourcePlatform||'—'}</span>{request.details&&<p>{request.details}</p>}{(request.productUrl||request.product_url)&&<a href={request.productUrl||request.product_url||''} target="_blank" rel="noreferrer">查看原商品 <Icon name="external" size={14}/></a>}</div></details>
       {request.product_url&&!request.productUrl&&<a href={request.product_url} target="_blank" rel="noreferrer">查看原商品 <Icon name="external" size={16}/></a>}{!request.product_url&&!request.productUrl&&<p className={styles.missingLink}>未保存商品链接</p>}
     </article>
-    {active?<><FeedbackPanel reviews={reviews} currentRevision={request.revision??1} onInvite={onInvite}/>
+    {active?<><InvitePanel request={request} invites={data.invites??[]} busy={busy} onInvite={onInvite} onCopyInvite={onCopyInvite}/><FeedbackPanel reviews={reviews} currentRevision={request.revision??1} onInvite={onInvite}/>
       <AgentPanel requestId={request.id} revision={request.revision??1} />
       <section className={styles.finalDecision}><small>最后一步</small><h2>听完不同视角，<br/>由你完成决定。</h2><textarea value={note} onChange={event=>{setNote(event.target.value);onDecisionNote(event.target.value)}} placeholder="写下为什么这样决定，留给之后的自己"/><div><button disabled={Boolean(busy)} onClick={()=>onDecide('BUY_NOW')}>现在购买</button><button disabled={Boolean(busy)} onClick={()=>onDecide('SAVE_FIRST')}>先存钱</button><button disabled={Boolean(busy)} onClick={()=>onDecide('WAIT')}>再等等</button></div></section>
     </>:<><section className={styles.timeline}><h2>决定时间线</h2><article className={styles.blueSurface}><small>01 · 心愿事实</small><b>{request.reason}</b></article><article className={styles.pinkSurface}><small>02 · 朋友视角</small><b>{reviews.length?`${reviews.length} 条回信已保存`:'当时没有真人回信'}</b>{reviews.map(review=><p key={review.id}>{review.reviewer_name}：{review.comment}</p>)}</article><article className={decision?.decision==='SAVE_FIRST'?styles.greenSurface:styles.yellowSurface}><small>03 · 最终决定</small><b>{decision?decisionCopy(decision.decision):statusCopy(request)}</b><p>{request.decision_note||'当时没有补充决定理由。'}</p><time>{decision?new Date(decision.decided_at).toLocaleString('zh-CN'):'时间未记录'}</time></article></section>{goal&&<SavingControl goal={goal} onAdd={amount=>onAddSaving(goal.id,amount)}/>}</>}{message&&<p className={styles.toast} role="status">{message}</p>}</section>;

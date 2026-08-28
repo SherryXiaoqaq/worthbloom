@@ -53,9 +53,9 @@ export function deriveDeviceState(data:AppData, timestamp=Date.now()):DeviceStat
 
   const wish=data.requests.find(item=>item.status==='REVIEWING');
   if(wish) {
-    const invites=data.invites.filter(item=>item.request_id===wish.id && !item.revoked);
-    const replies=invites.filter(item=>item.used_at).length;
-    return {mode:'WAITING',title:wish.name,progress:invites.length?clamp(replies/invites.length):0,flower_health:78,remaining:Math.max(0,invites.length-replies),days_left:null,message:`Waiting for ${Math.max(0,invites.length-replies)} friends`,asset_id:null};
+    const replies=data.reviews.filter(item=>item.request_id===wish.id).length;
+    const remaining=Math.max(0,3-replies);
+    return {mode:'WAITING',title:wish.name,progress:clamp(replies/3),flower_health:78,remaining,days_left:null,message:replies?`${replies} replies received`:'Waiting for different views',asset_id:null};
   }
 
   if(activeAssets[0])return assetState(activeAssets[0],timestamp);

@@ -5,7 +5,7 @@ import type { AppData, Asset, AssetReflection, AssetReflectionFeeling, GrowthAcc
 import { AUTH_USER_KEY, cloudBaseFetch } from '@/lib/cloudbase/client';
 import { normalizeDecision, normalizeSavingGoal } from '@/lib/wish-compat';
 import CreateWishSheet from './worthbloom-create';
-import { AssetsView, BottomNav, DecisionsView, DeviceView, GardenView, InboxView, ProfileView, SavingsView, View, WishesView, WishRoom } from './worthbloom-views';
+import { AgentHubView, AssetsView, BottomNav, DecisionsView, DeviceView, GardenView, InboxView, ProfileView, SavingsView, View, WishesView, WishRoom } from './worthbloom-views';
 import styles from './worthbloom-v2.module.css';
 
 const demoData:AppData={
@@ -30,13 +30,19 @@ const demoData:AppData={
 };
 
 type HistoryState={worthbloom:true;view:View;requestId?:string;scrollY:number};
-const viewNames=new Set<View>(['garden','profile','room','wishes','decisions','inbox','device','savings','assets']);
+const viewNames=new Set<View>(['garden','profile','room','wishes','decisions','inbox','device','agent','savings','assets']);
 function routeFromHash(hash:string):Pick<HistoryState,'view'|'requestId'>{
   const [rawView,rawRequestId]=hash.replace(/^#/,'').split('/');
   const view=viewNames.has(rawView as View)?rawView as View:'garden';
   return{view,requestId:rawRequestId?decodeURIComponent(rawRequestId):undefined};
 }
 async function json<T>(response:Response):Promise<T>{const data=await response.json() as T&{error?:string};if(!response.ok)throw new Error(data.error||'操作失败');return data}
+async function copyText(value:string){
+  if(typeof navigator!=='undefined'&&navigator.clipboard?.writeText){try{await navigator.clipboard.writeText(value);return}catch{/* 某些手机浏览器不允许直接写剪贴板，继续使用备用方式 */}}
+  if(typeof document==='undefined')throw new Error('当前环境无法复制链接');
+  const input=document.createElement('textarea');input.value=value;input.setAttribute('readonly','');input.style.position='fixed';input.style.opacity='0';document.body.appendChild(input);input.select();
+  const copied=document.execCommand('copy');input.remove();if(!copied)throw new Error('复制没有成功，请长按链接手动复制');
+}
 function normalizeData(data:AppData):AppData{
   const requests=data.requests||[];
   const decisions=(data.decisions||[]).map(item=>normalizeDecision(item as unknown as Record<string,unknown>)).filter((item):item is NonNullable<ReturnType<typeof normalizeDecision>>=>item!==null);
@@ -111,7 +117,9 @@ export default function WorthBloomMainClient(){
   async function openInbox(){navigate('inbox');try{const page=await loadInbox(true);const unreadIds=page?.items.filter(item=>!item.isRead).map(item=>item.review.id)??[];if(unreadIds.length){await json(await cloudBaseFetch('/api/inbox',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({reviewIds:unreadIds})}));setInboxItems(previous=>previous.map(item=>unreadIds.includes(item.review.id)?{...item,isRead:true}:item));setInboxUnreadCount(previous=>Math.max(0,previous-unreadIds.length));setSeenReviewIds(previous=>[...new Set([...previous,...unreadIds])])}}catch{/* 数据仍可从 /api/data 展示 */}}
   function back(){const state=history.state as HistoryState|null;if(state?.worthbloom&&view!=='garden'&&view!=='profile')history.back();else root('garden')}
   function openRoom(request:PurchaseRequest){setDecisionNote(request.decision_note||'');navigate('room',request.id)}
-  async function invite(request=active){if(!request)return;setBusy('invite');setMessage('');try{let invite=data.invites.find(item=>item.request_id===request.id&&!item.revoked&&!item.used_at);if(!invite){const output=await json<{invite:ReviewInvite}>(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'create_invite',requestId:request.id})}));invite=output.invite;setData(previous=>({...previous,invites:[...previous.invites,invite!]}))}const url=`${location.origin}/review/wish/${invite.token}`;await navigator.clipboard.writeText(url);setMessage('朋友邀请链接已复制，可以发到微信或其他群聊。');if(view!=='room')openRoom(request)}catch(error){setMessage(error instanceof Error?error.message:'邀请链接生成失败')}finally{setBusy('')}}
+  function inviteUrl(invite:ReviewInvite){return `${location.origin}/review/wish/${invite.token}`}
+  async function copyInvite(invite:ReviewInvite){setBusy(`copy:${invite.id}`);setMessage('');try{await copyText(inviteUrl(invite));setMessage('群聊邀请已复制，同一个链接可以收集多份回信。')}catch(error){setMessage(error instanceof Error?error.message:'链接复制失败')}finally{setBusy('')}}
+  async function invite(request=active){if(!request)return;setBusy('invite');setMessage('');try{let invite=data.invites.find(item=>item.request_id===request.id&&!item.revoked);if(!invite){const output=await json<{invite:ReviewInvite}>(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'create_invite',requestId:request.id})}));invite=output.invite;setData(previous=>({...previous,invites:[...previous.invites,invite!]}))}try{await copyText(inviteUrl(invite));setMessage('群聊邀请已复制，同一个链接可以收集多份回信。')}catch(error){setMessage(error instanceof Error?error.message:'邀请链接生成失败')}if(view!=='room')openRoom(request)}catch(error){setMessage(error instanceof Error?error.message:'邀请链接生成失败')}finally{setBusy('')}}
   async function decide(choice:ReviewChoice){if(!active)return;setBusy(choice);setMessage('');try{const output=await json<{target:'assets'|'saving'|'wishes';goal?:SavingGoal|null;asset?:Asset|null}>(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'decide',requestId:active.id,decision:choice,note:decisionNote})}));const decidedAt=new Date().toISOString();setData(previous=>({...previous,requests:previous.requests.map(item=>item.id===active.id?{...item,status:choice==='BUY_NOW'?'PURCHASED':choice==='SAVE_FIRST'?'SAVING':'ARCHIVED',decision_note:decisionNote||item.decision_note}:item),decisions:[{request_id:active.id,decision:choice,decided_at:decidedAt},...previous.decisions.filter(item=>item.request_id!==active.id)],savingGoals:output.goal&&!previous.savingGoals.some(item=>item.id===output.goal!.id)?[normalizeSavingGoal(output.goal as unknown as Record<string,unknown>),...previous.savingGoals]:previous.savingGoals,assets:output.asset&&!previous.assets.some(item=>item.id===output.asset!.id)?[output.asset,...previous.assets]:previous.assets}));await refresh();if(output.target==='saving')navigate('savings');else if(output.target==='assets')navigate('assets');else navigate('decisions')}catch(error){setMessage(error instanceof Error?error.message:'决定没有保存')}finally{setBusy('')}}
   async function addSaving(goalId:string,amount:number){await json(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'add_saving',goalId,amount})}));await refresh()}
   async function addAsset(payload:Record<string,unknown>){const output=await json<{asset:Asset}>(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'add_asset',payload})}));setData(previous=>({...previous,assets:[output.asset,...previous.assets]}));return output.asset}
@@ -132,10 +140,11 @@ export default function WorthBloomMainClient(){
     {view==='decisions'&&<DecisionsView data={data} onBack={back} onOpen={openRoom}/>}
     {view==='inbox'&&<InboxView data={data} items={inboxItems} nextCursor={inboxNextCursor} onLoadMore={()=>loadInbox(false)} onBack={back} onOpen={openRoom}/>}
     {view==='device'&&<DeviceView data={data} onBack={back}/>}
+    {view==='agent'&&<AgentHubView data={data} onBack={back}/>}
     {view==='savings'&&<SavingsView data={data} onBack={back} onAddSaving={addSaving}/>}
     {view==='assets'&&<AssetsView data={data} onBack={back} onAddAsset={addAsset} onUseAsset={useAsset} onDeleteAsset={deleteAsset} onAddReflection={addReflection}/>}
-    {view==='room'&&active&&<WishRoom key={active.id} data={data} request={active} busy={busy} message={message} onBack={back} onInvite={()=>void invite()} onDecide={choice=>void decide(choice)} onAddSaving={addSaving} onDecisionNote={setDecisionNote} onEdit={()=>{setEditRequest(active);setCreateOpen(true)}}/>}
-    {rootPage&&<BottomNav view={view} onRoot={root} onCreate={()=>setCreateOpen(true)}/>}
+    {view==='room'&&active&&<WishRoom key={active.id} data={data} request={active} busy={busy} message={message} onBack={back} onInvite={()=>void invite()} onCopyInvite={copyInvite} onDecide={choice=>void decide(choice)} onAddSaving={addSaving} onDecisionNote={setDecisionNote} onEdit={()=>{setEditRequest(active);setCreateOpen(true)}}/>}
+    {rootPage&&<BottomNav view={view} onRoot={root} onCreate={()=>setCreateOpen(true)} onAgent={()=>navigate('agent')} onAssets={()=>navigate('assets')}/>}
     <CreateWishSheet open={createOpen} editRequest={editRequest} pastReflections={data.assetReflections} onClose={()=>{setCreateOpen(false);setEditRequest(null)}} onCreated={created}/>
   </div></main>;
 }

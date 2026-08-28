@@ -151,7 +151,7 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     const images:Array<{id:string;url:string;sortOrder:number;isCover:boolean}>=Array.isArray(payload.images)?(payload.images as Array<Record<string,unknown>>).slice(0,6).map((img,index)=>({id:String(img.id??crypto.randomUUID()),url:String(img.url??''),sortOrder:Number(img.sortOrder??index),isCover:Boolean(img.isCover)})):[];
     if(images.length&&!images.some(img=>img.isCover))images[0].isCover=true;
     const request:PurchaseRequest={ id,name,price,reason,category:typeToCategory(typeRaw),total_units:payload.total_units==null&&payload.totalUnits==null?null:Number(payload.total_units??payload.totalUnits),usage_frequency:payload.usage_frequency?String(payload.usage_frequency):payload.usageFrequency?String(payload.usageFrequency):null,expiry_date:payload.expiry_date?String(payload.expiry_date):payload.expiryDate?String(payload.expiryDate):null,product_url:payload.product_url?String(payload.product_url):payload.productUrl?String(payload.productUrl):null,similar_item:concern,status:'REVIEWING',review_token:token(),created_at:ts,updatedAt:ts,review_count:0,revision:1,sourceType:(payload.sourceType??payload.source_type??'MANUAL') as PurchaseRequest['sourceType'],type:typeRaw,concern,brand:String(payload.brand??'').slice(0,80),skuLabel:String(payload.skuLabel??payload.sku_label??'').slice(0,120),details:String(payload.details??'').slice(0,2000),sourcePlatform:String(payload.sourcePlatform??payload.source_platform??'').slice(0,40),productUrl:payload.product_url?String(payload.product_url):payload.productUrl?String(payload.productUrl):null,images,totalUnits:payload.total_units==null&&payload.totalUnits==null?null:Number(payload.total_units??payload.totalUnits),usageFrequency:payload.usage_frequency?String(payload.usage_frequency):payload.usageFrequency?String(payload.usageFrequency):null,expiryDate:payload.expiry_date?String(payload.expiry_date):payload.expiryDate?String(payload.expiryDate):null,reviewToken:undefined,decisionNote:undefined };
-    const invites:ReviewInvite[]=[1,2,3].map(index=>({id:crypto.randomUUID(),request_id:id,token:token(),label:`朋友 ${index}`,used_by:null,used_at:null,revoked:0,created_at:ts}));
+    const invites:ReviewInvite[]=[{id:crypto.randomUUID(),request_id:id,token:token(),label:'群聊邀请',used_by:null,used_at:null,revoked:0,created_at:ts}];
     data.requests.unshift(request); data.invites.push(...invites);
     return { request:normalizeWish(request as unknown as Record<string,unknown>), invites };
   }
@@ -194,11 +194,12 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
   if (body.action === 'create_invite') {
     const requestId=String(body.requestId??''); const request=data.requests.find(item=>item.id===requestId);
     if(!request||request.status!=='REVIEWING') throw new LocalStoreError('这个心愿已经结束征集',409);
-    const invite:ReviewInvite={id:crypto.randomUUID(),request_id:requestId,token:token(),label:`朋友 ${data.invites.filter(item=>item.request_id===requestId).length+1}`,used_by:null,used_at:null,revoked:0,created_at:now()};
+    const existing=data.invites.find(item=>item.request_id===requestId&&!item.revoked);if(existing)return{invite:existing};
+    const invite:ReviewInvite={id:crypto.randomUUID(),request_id:requestId,token:token(),label:'群聊邀请',used_by:null,used_at:null,revoked:0,created_at:now()};
     data.invites.push(invite); return {invite};
   }
   if (body.action === 'revoke_invite') {
-    const invite=data.invites.find(item=>item.id===String(body.inviteId??'')); if(invite&&!invite.used_at)invite.revoked=1; return {ok:true};
+    const invite=data.invites.find(item=>item.id===String(body.inviteId??'')); if(invite)invite.revoked=1; return {ok:true};
   }
   if (body.action === 'add_saving') {
     const amount=Number(body.amount); if(!Number.isFinite(amount)||amount<=0)throw new LocalStoreError('金额必须大于 0');
@@ -241,7 +242,7 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
   if (body.action === 'decide') {
     const decision=String(body.decision) as ReviewChoice; if(!['BUY_NOW','SAVE_FIRST','WAIT'].includes(decision))throw new LocalStoreError('无效决定');
     const request=data.requests.find(item=>item.id===String(body.requestId??'')); if(!request||request.status!=='REVIEWING')throw new LocalStoreError('这个心愿已经完成决定',409);
-    const decidedAt=now();request.status=decision==='BUY_NOW'?'PURCHASED':decision==='SAVE_FIRST'?'SAVING':'ARCHIVED'; if(body.note)request.decision_note=String(body.note).trim().slice(0,2000); data.invites.filter(item=>item.request_id===request.id&&!item.used_at).forEach(item=>item.revoked=1);
+    const decidedAt=now();request.status=decision==='BUY_NOW'?'PURCHASED':decision==='SAVE_FIRST'?'SAVING':'ARCHIVED'; if(body.note)request.decision_note=String(body.note).trim().slice(0,2000); data.invites.filter(item=>item.request_id===request.id).forEach(item=>item.revoked=1);
     const existingDecision=data.decisions.find(item=>item.request_id===request.id);if(existingDecision){existingDecision.decision=decision;existingDecision.decided_at=decidedAt}else data.decisions.unshift({request_id:request.id,decision,decided_at:decidedAt});
     if(decision==='SAVE_FIRST'&&!data.savingGoals.some(item=>item.request_id===request.id))data.savingGoals.unshift({id:`saving-${request.id}`,request_id:request.id,name:request.name,target:request.price,current:0,weekly_plan:null,created_at:now()});
     let asset:Asset|null=null;const goal=data.savingGoals.find(item=>item.request_id===request.id)??null;
@@ -286,7 +287,6 @@ export function getLocalReview(tokenValue:string) {
   const request=data.requests.find(item=>item.id===invite.request_id);
   let linkState:'ACTIVE'|'USED'|'REVOKED'|'REQUEST_DECIDED'|'EXPIRED'='ACTIVE';
   if(invite.revoked)linkState='REVOKED';
-  else if(invite.used_at)linkState='USED';
   else if(!request||request.status!=='REVIEWING')linkState='REQUEST_DECIDED';
   if(linkState!=='ACTIVE')throw new LocalStoreError('这张邀请卡已经完成使命了',410,linkState);
   const normalized=normalizeWish(request! as unknown as Record<string,unknown>);
@@ -304,14 +304,14 @@ export function submitLocalReview(body:{token?:string;reviewerName?:string;revie
   const comment=commentParts||'';
   if(!comment)throw new LocalStoreError('请完成理由',400);
   const invite=data.invites.find(item=>item.token===body.token); const request=invite?data.requests.find(item=>item.id===invite.request_id):null;
-  if(!invite||invite.revoked||invite.used_at||!request||request.status!=='REVIEWING')throw new LocalStoreError('这张邀请卡已使用或心愿已结束',409,'REVIEW_LINK_USED');
+  if(!invite||invite.revoked||!request||request.status!=='REVIEWING')throw new LocalStoreError('邀请链接已关闭或心愿已结束',409,'REVIEW_LINK_CLOSED');
   const stamp=body.stamp as string|undefined;
   const stampToChoice:Record<string,ReviewChoice>={FITS:'BUY_NOW',CONDITIONAL:'SAVE_FIRST',WAIT:'WAIT',NOT_FIT:'WAIT',NEED_INFO:'WAIT'};
   const choice=(body.choice??(stamp?stampToChoice[stamp]:'WAIT')) as ReviewChoice;
   const rev=Number(request.revision??1);
   const reviewId=crypto.randomUUID();
   const review:Review={ id:reviewId, request_id:request.id, reviewer_name:name, choice, comment:comment.slice(0,500), created_at:now(), requestRevision:rev, reviewerRole:(body.reviewerRole as Review['reviewerRole'])??undefined, stamp:(stamp as Review['stamp'])??undefined, reasons:reasons.length?reasons:undefined, note:note||undefined, claimedBy:null, claimedAt:null, legacyContext:false };
-  invite.used_by=name; invite.used_at=now(); request.review_count=(request.review_count??0)+1;
+  request.review_count=(request.review_count??0)+1;
   data.reviews.unshift(review);
   const claimToken=crypto.randomUUID().replaceAll('-','');
   // local preview only: stash claim token on review for later claim (round 6)

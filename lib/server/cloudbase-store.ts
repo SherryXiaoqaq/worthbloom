@@ -307,10 +307,10 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     await saveDocument(collections.requests, id, { ...request, owner_id: ownerId });
     if (images.length) await saveDocument(collections.wishImages, `${id}-images`, { owner_id: ownerId, request_id: id, images, updated_at: createdAt });
 
-    const invites: ReviewInvite[] = [1, 2, 3].map(index => ({
-      id: crypto.randomUUID(), request_id: id, token: inviteToken(), label: `朋友 ${index}`,
+    const invites: ReviewInvite[] = [{
+      id: crypto.randomUUID(), request_id: id, token: inviteToken(), label: '群聊邀请',
       used_by: null, used_at: null, revoked: 0, created_at: now(),
-    }));
+    }];
     await Promise.all(invites.map(invite => saveDocument(collections.invites, invite.id, { ...invite, owner_id: ownerId })));
     return { request: normalizeWish(request as unknown as Record<string, unknown>), invites };
   }
@@ -373,11 +373,13 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     const request = await ownedDocument(collections.requests, requestId, ownerId);
     if (!request || request.status !== 'REVIEWING') throw new CloudBaseStoreError('这个心愿已经结束征集', 409);
     const existing = (await ownerDocuments(collections.invites, ownerId)).filter(item => item.request_id === requestId);
+    const active = existing.find(item => !item.revoked);
+    if (active) return { invite: cleanDocument(active) };
     const invite: ReviewInvite = {
       id: crypto.randomUUID(),
       request_id: requestId,
       token: inviteToken(),
-      label: `朋友 ${existing.length + 1}`,
+      label: '群聊邀请',
       used_by: null,
       used_at: null,
       revoked: 0,
@@ -390,7 +392,7 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
   if (body.action === 'revoke_invite') {
     const inviteId = String(body.inviteId ?? '');
     const invite = await ownedDocument(collections.invites, inviteId, ownerId);
-    if (invite && !invite.used_at) await db.collection(collections.invites).doc(inviteId).update({ revoked: 1 });
+    if (invite) await db.collection(collections.invites).doc(inviteId).update({ revoked: 1 });
     return { ok: true };
   }
 
@@ -497,7 +499,7 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     await db.collection(collections.requests).doc(requestId).update(note ? { status, decision_note: note } : { status });
     await saveDocument(collections.decisions, `decision-${requestId}`, { owner_id: ownerId, request_id: requestId, decision, decided_at: now() });
     if (note) await awardCloudBaseGrowth(ownerId, 'decision_with_reason', requestId, 20);
-    const invites = (await ownerDocuments(collections.invites, ownerId)).filter(item => item.request_id === requestId && !item.used_at);
+    const invites = (await ownerDocuments(collections.invites, ownerId)).filter(item => item.request_id === requestId);
     await Promise.all(invites.map(invite => db.collection(collections.invites).doc(String(invite.id || invite._id)).update({ revoked: 1 })));
 
     if (decision === 'SAVE_FIRST') {
@@ -553,7 +555,6 @@ export async function getCloudBaseReview(token: string) {
   const request = (requestResult.data || [])[0] as CloudDocument | undefined;
   let linkState: 'ACTIVE' | 'USED' | 'REVOKED' | 'REQUEST_DECIDED' | 'EXPIRED' = 'ACTIVE';
   if (invite.revoked) linkState = 'REVOKED';
-  else if (invite.used_at) linkState = 'USED';
   else if (!request || request.status !== 'REVIEWING' || request.owner_id !== invite.owner_id) linkState = 'REQUEST_DECIDED';
   if (linkState !== 'ACTIVE') throw new CloudBaseStoreError('这张邀请卡已经完成使命了', 410, linkState);
   const normalized = normalizeWish(request as unknown as Record<string, unknown>);
@@ -584,14 +585,12 @@ export async function submitCloudBaseReview(body: { token?: string; reviewerName
   const db = getCloudBaseDb();
   const inviteResult = await db.collection(collections.invites).where({ token: body.token }).limit(1).get();
   const invite = (inviteResult.data || [])[0] as CloudDocument | undefined;
-  if (!invite || invite.revoked || invite.used_at) throw new CloudBaseStoreError('这张邀请卡已使用或心愿已结束', 409, 'REVIEW_LINK_USED');
+  if (!invite || invite.revoked) throw new CloudBaseStoreError('邀请链接已关闭或心愿已结束', 409, 'REVIEW_LINK_CLOSED');
   const requestResult = await db.collection(collections.requests).doc(String(invite.request_id)).get();
   const request = (requestResult.data || [])[0] as CloudDocument | undefined;
-  if (!request || request.status !== 'REVIEWING' || request.owner_id !== invite.owner_id) throw new CloudBaseStoreError('这张邀请卡已使用或心愿已结束', 409, 'REVIEW_LINK_USED');
+  if (!request || request.status !== 'REVIEWING' || request.owner_id !== invite.owner_id) throw new CloudBaseStoreError('邀请链接已关闭或心愿已结束', 409, 'REVIEW_LINK_CLOSED');
 
   const usedAt = now();
-  const claimed = await db.collection(collections.invites).where({ _id: String(invite._id), used_at: null, revoked: 0 }).update({ used_by: name, used_at: usedAt });
-  if (claimed.updated !== 1) throw new CloudBaseStoreError('这张邀请卡刚刚已经被使用了', 409, 'REVIEW_LINK_USED');
   const reviewId = crypto.randomUUID();
   const rev = Number(request.revision ?? 1);
   const normalizedRequest = normalizeWish(request as unknown as Record<string, unknown>);

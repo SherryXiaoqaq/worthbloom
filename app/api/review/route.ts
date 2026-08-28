@@ -35,7 +35,6 @@ export async function GET(request: Request) {
     if (!row) return fail('链接不存在或已撤销', 404, 'REVIEW_LINK_NOT_FOUND');
     let linkState: ReviewLinkState = 'ACTIVE';
     if (row.revoked) linkState = 'REVOKED';
-    else if (row.used_at) linkState = 'USED';
     else if (row.status !== 'REVIEWING') linkState = 'REQUEST_DECIDED';
     if (linkState !== 'ACTIVE') return fail('这张邀请卡已经完成使命了', 410, linkState);
     const wish = normalizeWish(row);
@@ -76,8 +75,6 @@ export async function POST(request: Request) {
     const invite = await db.prepare(`SELECT i.id, i.request_id, p.status, p.revision FROM review_invites i JOIN purchase_requests p ON p.id = i.request_id WHERE i.token = ? AND i.revoked = 0`).bind(body.token).first<{ id: string; request_id: string; status: string; revision: number }>();
     if (!invite) return fail('链接不存在或已撤销', 404, 'REVIEW_LINK_NOT_FOUND');
     if (invite.status !== 'REVIEWING') return fail('这个心愿已经完成决定', 410, 'REQUEST_DECIDED');
-    const claimed = await db.prepare(`UPDATE review_invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE id = ? AND used_at IS NULL AND revoked = 0`).bind(name, invite.id).run();
-    if (!claimed.meta.changes) return fail('这张邀请卡刚刚已经被使用了', 410, 'REVIEW_LINK_USED');
     const reviewId = crypto.randomUUID();
     const claimToken = crypto.randomUUID().replaceAll('-', '');
     const wishRow = await db.prepare(`SELECT name, price, type, reason, concern FROM purchase_requests WHERE id = ?`).bind(invite.request_id).first<Record<string, unknown>>();

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AgentReport, AgentSession, EvidenceItem } from '@/lib/types';
 import { cloudBaseFetch } from '@/lib/cloudbase/client';
 import styles from './worthbloom-v2.module.css';
@@ -36,6 +36,24 @@ export function AgentPanel({ requestId, revision }: { requestId: string; revisio
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [readyToComplete, setReadyToComplete] = useState(false);
+  const [loadingSession, setLoadingSession] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadSession() {
+      setLoadingSession(true); setError('');
+      try {
+        const res = await json<{ session: AgentSession | null; readyToComplete: boolean }>(await cloudBaseFetch('/api/agent', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'load', requestId, expectedRevision: revision }) }));
+        if (mounted) { setSession(res.session); setReadyToComplete(res.readyToComplete); }
+      } catch (e) {
+        if (mounted) setError(e instanceof Error ? e.message : '读取对话记录失败');
+      } finally {
+        if (mounted) setLoadingSession(false);
+      }
+    }
+    void loadSession();
+    return () => { mounted = false; };
+  }, [requestId, revision]);
 
   async function start() {
     setBusy('start'); setError('');
@@ -77,26 +95,28 @@ export function AgentPanel({ requestId, revision }: { requestId: string; revisio
     finally { setBusy(''); }
   }
 
-  if (!session) return <section className={styles.agentPanel}><div className={styles.agentEntry}><Sparkle size={28} /><div><b>AI 决策对话</b><p>基于心愿事实与朋友反馈，逐个问题帮你理清，最后给出一份带来源的决策报告。不替你决定。</p></div><button className={styles.primary} disabled={!!busy} onClick={() => void start()}>{busy === 'start' ? '正在开始…' : '开始对话'}</button></div>{error && <p className={styles.toast}>{error}</p>}</section>;
+  if (loadingSession) return <section className={styles.agentPanel}><div className={styles.agentEntry}><Sparkle size={24} /><div><b>正在找回这次聊天</b><p>稍等一下，之前的回答和回看会保留。</p></div></div></section>;
+
+  if (!session) return <section className={styles.agentPanel}><div className={styles.agentEntry}><Sparkle size={28} /><div><b>和 AI 聊聊这件事</b><p>把想买它的理由、担心和真实生活场景说出来。AI 会听着你的话继续追问，帮你看见想要、代价和未知，不替你决定。</p></div><button className={styles.primary} disabled={!!busy} onClick={() => void start()}>{busy === 'start' ? '正在开始…' : '开始聊聊'}</button></div>{error && <p className={styles.toast}>{error}</p>}</section>;
 
   if (session.status === 'COMPLETED' && session.report) {
     const r = session.report;
-    return <section className={styles.agentPanel}><div className={styles.agentHeader}><Sparkle size={20} /><h2>AI 决策报告</h2><small>最终决定由你完成</small></div>
+    return <section className={styles.agentPanel}><div className={styles.agentHeader}><Sparkle size={20} /><h2>这次聊过的事</h2><small>最终决定由你完成</small></div>
       {REPORT_GROUPS.map(g => { const items = r[g.key] as EvidenceItem[]; return items.length ? <div key={g.key} className={styles.reportGroup}><h3>{g.label}</h3><EvidenceList items={items} /></div> : null; })}
       <div className={styles.reportDisclaimer}><p>{r.disclaimer}</p><button className={styles.headingLink} onClick={() => void start()}>重新开始对话</button></div>
     </section>;
   }
 
-  if (session.status === 'DISMISSED') return <section className={styles.agentPanel}><div className={styles.agentEntry}><b>已放弃本次对话</b><p>可以重新开始一个新对话。</p><button className={styles.primary} disabled={!!busy} onClick={() => void start()}>重新开始</button></div></section>;
+  if (session.status === 'DISMISSED') return <section className={styles.agentPanel}><div className={styles.agentEntry}><b>这次聊天先放在这里</b><p>已经回答的内容还在，想继续时可以重新开始。</p><button className={styles.primary} disabled={!!busy} onClick={() => void start()}>重新开始</button></div></section>;
 
   // IN_PROGRESS
   return <section className={styles.agentPanel}>
-    <div className={styles.agentHeader}><Sparkle size={20} /><h2>AI 决策对话</h2><small>已问 {session.questionCount} 题</small><button className={styles.dismissBtn} onClick={() => void dismiss()}>放弃对话</button></div>
+    <div className={styles.agentHeader}><Sparkle size={20} /><h2>和 AI 聊聊</h2><small>第 {session.questionCount} 轮</small><button className={styles.dismissBtn} onClick={() => void dismiss()}>先放一放</button></div>
     <div className={styles.agentMessages}>
       {session.messages.map(m => m.role === 'ASSISTANT' ? <div key={m.id} className={styles.msgAssistant}><small>AI</small><p>{m.content}</p></div> : <div key={m.id} className={styles.msgUser}><small>{m.skipped ? '已跳过' : '你'}</small><p>{m.content || '（跳过）'}</p></div>)}
     </div>
-    {readyToComplete ? <div className={styles.agentComplete}><p>问题问完了，可以生成报告了。</p><button className={styles.primary} disabled={!!busy} onClick={() => void complete()}>{busy === 'complete' ? '正在生成…' : '生成决策报告'}</button></div>
-      : <div className={styles.agentInput}><textarea rows={3} value={answer} onChange={e => setAnswer(e.target.value)} placeholder="回答 AI 的问题" /><div className={styles.agentInputActions}><button onClick={() => void reply(true)} disabled={!!busy}>暂时跳过</button><button className={styles.primary} onClick={() => void reply(false)} disabled={!!busy || !answer.trim()}>{busy === 'reply' ? '提交中…' : '提交回答'}</button></div></div>}
+    {readyToComplete ? <div className={styles.agentComplete}><p>我们已经把几个关键地方聊过一遍，可以整理成一份回看。</p><button className={styles.primary} disabled={!!busy} onClick={() => void complete()}>{busy === 'complete' ? '正在整理…' : '整理这次聊天'}</button></div>
+      : <div className={styles.agentInput}><textarea rows={4} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();if(answer.trim()&&!busy)void reply(false)}}} placeholder="写下你的真实想法，AI 会接着聊（Ctrl / ⌘ + Enter 发送）" /><div className={styles.agentInputActions}><button onClick={() => void reply(true)} disabled={!!busy}>先跳过</button><button className={styles.primary} onClick={() => void reply(false)} disabled={!!busy || !answer.trim()}>{busy === 'reply' ? '提交中…' : '继续聊'}</button></div></div>}
     {error && <p className={styles.toast}>{error}</p>}
   </section>;
 }

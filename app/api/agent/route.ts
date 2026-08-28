@@ -5,7 +5,7 @@ import { getCloudBaseDb } from '@/lib/server/cloudbase-http-db';
 import { getLocalData, isLocalPreview } from '@/lib/server/local-store';
 import { isOwnerRequest } from '@/lib/server/owner';
 import { normalizeWish, normalizeReview } from '@/lib/wish-compat';
-import { agentComplete, agentNextQuestion, AGENT_MAX_QUESTIONS } from '@/lib/server/agent';
+import { agentComplete, agentNextQuestion, AGENT_MAX_QUESTIONS, fallbackQuestion } from '@/lib/server/agent';
 import type { AgentMessage, AgentReport, AgentSession, PurchaseRequest, Review } from '@/lib/types';
 import { AiServiceError } from '@/lib/server/ai/client';
 
@@ -68,6 +68,12 @@ async function d1FindInProgress(requestId: string, revision: number): Promise<Ag
   const s = await db.prepare(`SELECT * FROM agent_sessions WHERE request_id = ? AND request_revision = ? AND status = 'IN_PROGRESS' ORDER BY created_at DESC LIMIT 1`).bind(requestId, revision).first<Record<string, unknown>>();
   if (!s) return null;
   return d1LoadSession(String(s.id));
+}
+
+async function d1FindLatest(requestId: string, revision: number): Promise<AgentSession | null> {
+  const db = await getDb();
+  const s = await db.prepare(`SELECT id FROM agent_sessions WHERE request_id = ? AND request_revision = ? ORDER BY updated_at DESC, created_at DESC LIMIT 1`).bind(requestId, revision).first<{ id: string }>();
+  return s ? d1LoadSession(String(s.id)) : null;
 }
 
 async function d1StartSession(requestId: string, revision: number): Promise<AgentSession> {
@@ -178,6 +184,33 @@ export async function POST(request: Request) {
   const useLocal = !useCloudBase && isLocalPreview(request);
 
   try {
+    if (body.action === 'load') {
+      const requestId = String(body.requestId ?? '');
+      const expected = Number(body.expectedRevision);
+      const ctx = await loadContext(request, requestId, userId);
+      if (!ctx) return fail('没有找到这个心愿', 404, 'NOT_FOUND');
+      const rev = ctx.request.revision ?? 1;
+      if (!Number.isFinite(expected) || expected !== rev) return fail('心愿已被修改，请基于最新版本加载对话', 409, 'REVISION_CONFLICT');
+
+      let session: AgentSession | null = null;
+      if (useLocal) {
+        session = [...localSessions.values()]
+          .filter(item => item.requestId === requestId && item.requestRevision === rev)
+          .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0] ?? null;
+      } else if (!useCloudBase) {
+        session = await d1FindLatest(requestId, rev);
+      } else {
+        const db = getCloudBaseDb();
+        const res = await db.collection('agent_sessions').where({ owner_id: userId, request_id: requestId, request_revision: rev }).limit(100).get();
+        const docs = (res.data || []) as Record<string, unknown>[];
+        docs.sort((left, right) => String(right.updated_at ?? right.created_at ?? '').localeCompare(String(left.updated_at ?? left.created_at ?? '')));
+        const latest = docs[0];
+        if (latest) session = await cloudBaseLoadSession(String(latest.id || latest._id || ''), userId);
+      }
+      const readyToComplete = Boolean(session && session.status === 'IN_PROGRESS' && (session.questionCount >= AGENT_MAX_QUESTIONS || session.messages.at(-1)?.role === 'USER'));
+      return Response.json({ session, readyToComplete });
+    }
+
     if (body.action === 'start') {
       const requestId = String(body.requestId ?? '');
       const expected = Number(body.expectedRevision);
@@ -211,7 +244,7 @@ export async function POST(request: Request) {
           const turn = await agentNextQuestion(ctx, session.messages);
           firstQuestion = turn.content;
         } catch {
-          firstQuestion = '先想想：如果买下它，你最期待的第一天会怎么使用？';
+          firstQuestion = fallbackQuestion(ctx, session.messages);
         }
         const msg: AgentMessage = { id: crypto.randomUUID(), role: 'ASSISTANT', content: firstQuestion, questionId: 'q1', createdAt: new Date().toISOString() };
         if (useLocal) { session.messages.push(msg); session.questionCount += 1; session.updatedAt = msg.createdAt; }
@@ -253,7 +286,10 @@ export async function POST(request: Request) {
             else { await cloudBaseAddMessage(session, qMsg, userId); }
           }
         } catch {
-          readyToComplete = true;
+          const qMsg: AgentMessage = { id: crypto.randomUUID(), role: 'ASSISTANT', content: fallbackQuestion(ctx, session.messages), questionId: `q${session.questionCount + 1}`, createdAt: new Date().toISOString() };
+          if (useLocal) { session.messages.push(qMsg); session.questionCount += 1; session.updatedAt = qMsg.createdAt; }
+          else if (!useCloudBase) { await d1AddMessage(session, qMsg); }
+          else { await cloudBaseAddMessage(session, qMsg, userId); }
         }
       }
       return Response.json({ session, readyToComplete });
