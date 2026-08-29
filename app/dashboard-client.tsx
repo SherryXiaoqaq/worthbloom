@@ -47,7 +47,7 @@ const fallbackData: AppData = {
 const emptyData: AppData = { requests:[], reviews:[], invites:[], decisions:[], savingGoals:[], assets:[], assetReflections:[] };
 
 function Flower({ progress=78, small=false }: { progress?:number; small?:boolean }) {
-  return <div className={`wb-flower ${small?'is-small':''}`} aria-label={`电子花成长 ${progress}%`}><img className="wb-photo" src="/flower.webp" alt="" draggable={false}/></div>;
+  return <div className={`wb-flower ${small?'is-small':''}`} aria-label={`电子花成长 ${progress}%`}><img className="wb-photo" src="/flower-main.png" alt="" draggable={false}/></div>;
 }
 
 function TopBar({ title, onBack, action, nav }: { title:string; onBack?:()=>void; action?:React.ReactNode; nav?:TopNav }) {
