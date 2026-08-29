@@ -345,10 +345,45 @@ export function InboxView({data,items,nextCursor,onLoadMore,onBack,onOpen}:{data
   return <section className={styles.subPage}><PageHeader title="朋友回信" onBack={onBack}/><p className={styles.pageLead}>按时间查看收到的真实视角。回信只提供参考，决定仍然属于你。</p><div className={styles.inboxList}>{visible.map(item=>{const review=item.review;const request=data.requests.find(entry=>entry.id===review.request_id);return <button key={review.id} disabled={!request} onClick={()=>request&&onOpen(request)}><span className={styles.replyAvatar}>{review.reviewer_name.slice(0,1)}</span><span><small>{!item.isRead?'未读 · ':''}{review.reviewer_name} · {new Date(review.created_at??'').toLocaleDateString('zh-CN')}</small><b>{item.requestName}</b><p>{review.comment}</p></span><Icon name="chevron"/></button>})}</div>{!visible.length&&<p className={styles.emptyState}>还没有收到朋友回信。</p>}{nextCursor&&<button className={styles.headingLink} disabled={loading} onClick={()=>void loadMore()}>{loading?'加载中…':'加载更多回信'}</button>}</section>;
 }
 
+const HAOHAOHUA_BLUETOOTH = {
+  deviceName: 'HaoHaoHua',
+  serviceUuid: '4fafc201-1fb5-459e-8fcc-c5c9c331914b',
+  characteristicUuid: 'beb5483e-36e1-4688-b7f5-ea07361b26a8',
+} as const;
+
+type BluetoothCharacteristicLike = {
+  writeValue(value: Uint8Array): Promise<void>;
+  writeValueWithResponse?: (value: Uint8Array) => Promise<void>;
+};
+type BluetoothGattServerLike = {
+  connected: boolean;
+  connect(): Promise<BluetoothGattServerLike>;
+  disconnect(): void;
+  getPrimaryService(uuid: string): Promise<{getCharacteristic(uuid: string): Promise<BluetoothCharacteristicLike>}>;
+};
+type BluetoothDeviceLike = {
+  name?: string;
+  gatt?: BluetoothGattServerLike;
+  addEventListener?: (type: string, listener: EventListener) => void;
+  removeEventListener?: (type: string, listener: EventListener) => void;
+};
+type BluetoothApiLike = {
+  requestDevice(options: {filters: Array<{name?: string;services?: string[]}>;optionalServices?: string[]}): Promise<BluetoothDeviceLike>;
+};
+
 export function DeviceView({data,onBack}:{data:AppData;onBack:()=>void}){
   const candidates=useMemo(()=>data.requests.filter(request=>request.status==='REVIEWING'||(request.status==='SAVING'&&data.savingGoals.some(goal=>goal.request_id===request.id))),[data.requests,data.savingGoals]);
   const [focusRequestId,setFocusRequestId]=useState<string|null>(null);
   const [syncMessage,setSyncMessage]=useState('');
+  const [bluetoothDevice,setBluetoothDevice]=useState<BluetoothDeviceLike|null>(null);
+  const [bluetoothCharacteristic,setBluetoothCharacteristic]=useState<BluetoothCharacteristicLike|null>(null);
+  const [bluetoothBusy,setBluetoothBusy]=useState(false);
+  const [bluetoothMessage,setBluetoothMessage]=useState('');
+  const [bluetoothError,setBluetoothError]=useState('');
+  const [sendProgress,setSendProgress]=useState('0');
+  const bluetoothCleanupRef=useRef<(() => void)|null>(null);
+  const bluetoothDeviceRef=useRef<BluetoothDeviceLike|null>(null);
+  const bluetoothCharacteristicRef=useRef<BluetoothCharacteristicLike|null>(null);
   useEffect(()=>{let active=true;cloudBaseFetch('/api/device/focus',{cache:'no-store'}).then(async response=>await response.json() as {focusRequestId?:string|null}).then(output=>{if(active)setFocusRequestId(output.focusRequestId??null)}).catch(()=>{});return()=>{active=false}},[]);
   const defaultRequestId=data.savingGoals[0]?.request_id??undefined;
   const selected=candidates.find(request=>request.id===focusRequestId)??candidates.find(request=>request.id===defaultRequestId)??candidates[0];
@@ -359,17 +394,71 @@ export function DeviceView({data,onBack}:{data:AppData;onBack:()=>void}){
       ? {mode:'GROWING' as const,title:selected.name,progress:selectedGoal.target?Math.min(1,selectedGoal.current/selectedGoal.target):0,flower_health:80,remaining:Math.max(0,selectedGoal.target-selectedGoal.current),days_left:null,message:'正在靠近目标',asset_id:null,request_id:selected.id}
       : {mode:'WAITING' as const,title:selected.name,progress:Math.min(1,selectedReplies/3),flower_health:78,remaining:Math.max(0,3-selectedReplies),days_left:null,message:selectedReplies?'回信已到，等你决定':'等待不同视角',asset_id:null,request_id:selected.id}
     : deriveDeviceSummary(data);
+  useEffect(()=>()=>{bluetoothCleanupRef.current?.();bluetoothCleanupRef.current=null},[]);
+  function progressForRequest(requestId:string){
+    const request=data.requests.find(item=>item.id===requestId);
+    if(!request)return 0;
+    const goal=data.savingGoals.find(item=>item.request_id===request.id);
+    return goal?.target?Math.min(1,goal.current/goal.target):Math.min(1,data.reviews.filter(review=>review.request_id===request.id).length/3);
+  }
   async function selectWish(requestId:string){
-    setFocusRequestId(requestId);setSyncMessage('正在同步…');
+    setFocusRequestId(requestId);setSendProgress(String(Math.round(progressForRequest(requestId)*100)));setSyncMessage('正在同步…');
     try{const response=await cloudBaseFetch('/api/device/focus',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({requestId})});const output=await response.json() as {error?:string};if(!response.ok)throw new Error(output.error||'同步失败');setSyncMessage('已同步，实体花会在下一次刷新时更新（最长约 5 秒）。')}
     catch(error){setSyncMessage(error instanceof Error?error.message:'同步失败')}
+  }
+  async function connectBluetooth(){
+    setBluetoothBusy(true);setBluetoothError('');setBluetoothMessage('');
+    const bluetooth=(typeof navigator!=='undefined'?(navigator as Navigator & {bluetooth?:BluetoothApiLike}).bluetooth:undefined);
+    if(!bluetooth){setBluetoothError('当前浏览器不支持 Web Bluetooth。请使用 Android 手机上的 Chrome。');setBluetoothBusy(false);return}
+    if(typeof window!=='undefined'&&!window.isSecureContext&&location.hostname!=='localhost'&&location.hostname!=='127.0.0.1'){
+      setBluetoothError('蓝牙连接需要 HTTPS 页面。请打开以 https:// 开头的队友链接。');setBluetoothBusy(false);return
+    }
+    try{
+      bluetoothCleanupRef.current?.();
+      bluetoothCleanupRef.current=null;
+      const device=await bluetooth.requestDevice({filters:[{name:HAOHAOHUA_BLUETOOTH.deviceName}],optionalServices:[HAOHAOHUA_BLUETOOTH.serviceUuid]});
+      const server=await device.gatt?.connect();
+      if(!server)throw new Error('没有找到设备的 GATT 服务，请确认 ESP32 已上电并正在广播。');
+      const service=await server.getPrimaryService(HAOHAOHUA_BLUETOOTH.serviceUuid);
+      const characteristic=await service.getCharacteristic(HAOHAOHUA_BLUETOOTH.characteristicUuid);
+      const handleDisconnected=()=>{
+        if(bluetoothDeviceRef.current!==device)return;
+        bluetoothDeviceRef.current=null;bluetoothCharacteristicRef.current=null;setBluetoothDevice(null);setBluetoothCharacteristic(null);setBluetoothMessage('设备已断开，请重新连接。');
+      };
+      device.addEventListener?.('gattserverdisconnected',handleDisconnected);
+      bluetoothCleanupRef.current=()=>{device.removeEventListener?.('gattserverdisconnected',handleDisconnected);if(device.gatt?.connected)device.gatt.disconnect();};
+      bluetoothDeviceRef.current=device;bluetoothCharacteristicRef.current=characteristic;setBluetoothDevice(device);setBluetoothCharacteristic(characteristic);setBluetoothMessage(`已连接 ${device.name||HAOHAOHUA_BLUETOOTH.deviceName}`);
+    }catch(error){
+      const name=error instanceof DOMException?error.name:'';
+      if(name==='NotFoundError'){setBluetoothError('没有选择设备。请再次点击“连接设备”并选择 HaoHaoHua。')}
+      else if(name==='SecurityError'){setBluetoothError('浏览器阻止了蓝牙访问，请确认页面使用 HTTPS，并允许附近设备权限。')}
+      else{setBluetoothError(error instanceof Error?error.message:'连接失败，请确认 ESP32 已上电并正在广播。')}
+      bluetoothDeviceRef.current=null;bluetoothCharacteristicRef.current=null;setBluetoothDevice(null);setBluetoothCharacteristic(null);
+    }finally{setBluetoothBusy(false)}
+  }
+  function disconnectBluetooth(){bluetoothCleanupRef.current?.();bluetoothCleanupRef.current=null;bluetoothDeviceRef.current=null;bluetoothCharacteristicRef.current=null;setBluetoothDevice(null);setBluetoothCharacteristic(null);setBluetoothMessage('已断开设备。');setBluetoothError('')}
+  async function sendToESP32(progressValue:number){
+    const characteristic=bluetoothCharacteristicRef.current??bluetoothCharacteristic;
+    if(!characteristic)throw new Error('请先连接 HaoHaoHua 设备。');
+    if(!Number.isInteger(progressValue)||progressValue<0||progressValue>100)throw new Error('进度必须是 0～100 的整数。');
+    const payload=String(progressValue);
+    const bytes=new TextEncoder().encode(payload);
+    if(characteristic.writeValueWithResponse)await characteristic.writeValueWithResponse(bytes);else await characteristic.writeValue(bytes);
+    setBluetoothMessage(`已发送 ${payload}%`);
+  }
+  async function submitBluetoothProgress(event:FormEvent){
+    event.preventDefault();setBluetoothError('');
+    if(sendProgress.trim()===''){setBluetoothError('请输入 0～100 的进度。');return}
+    const value=Number(sendProgress);
+    if(!Number.isInteger(value)||value<0||value>100){setBluetoothError('进度必须是 0～100 的整数。');return}
+    setBluetoothBusy(true);try{await sendToESP32(value)}catch(error){setBluetoothError(error instanceof Error?error.message:'发送失败，请重新连接设备。')}finally{setBluetoothBusy(false)}
   }
   const mode={SEED:'还没有种下心愿',SPROUT:'刚刚开始',WAITING:'等朋友回信',GROWING:'正在靠近目标',BLOOM:'心愿实现了',HEALTHY:'正在使用',STRESSED:'有一阵没用了',THIRSTY:'到了该留意的时候',RECOVERING:'重新用起来了'}[state.mode];
   const asset=state.asset_id?(data.assets??[]).find(item=>item.id===state.asset_id):undefined;
   const remainingLabel=state.mode==='WAITING'?'还等回信':state.mode==='GROWING'?'还差金额':asset?.type==='STORED_VALUE'?'剩余余额':asset?.total_units!=null?'剩余次数':state.days_left!=null?'剩余有效期':'已记录使用';
   const remainingValue=state.mode==='WAITING'?(state.remaining==null?'—':`${Math.round(state.remaining)} 封`):state.mode==='GROWING'||asset?.type==='STORED_VALUE'?(state.remaining==null?'—':`¥${Math.round(state.remaining).toLocaleString()}`):asset?.total_units!=null?(state.remaining==null?'—':`${Math.round(state.remaining)} 次`):state.days_left!=null?`${Math.max(0,state.days_left)} 天`:asset?`${asset.usage_count} 次`:`${Math.round(state.progress*100)}%`;
   const statusLine=state.message===mode?mode:`${mode} · ${state.message}`;
-  return <section className={styles.subPage}><PageHeader title="电子花" onBack={onBack}/><aside className={styles.deviceIntro}><span className={styles.deviceIntroIcon}><Icon name="flower" size={22}/></span><div><h2>电子花是什么？</h2><p>它把心愿进度变成一朵会慢慢开放的花。左右滑动卡片，再点一下，就能切换实体花正在陪伴的心愿。</p><small>不连接实体设备时，页面仍可单独使用。</small></div></aside>{candidates.length>0&&<section className={styles.deviceWishSection}><div><b>切换心愿</b><small>新建和未完成的心愿会出现在这里</small></div><div className={styles.deviceWishRail}>{candidates.map(request=>{const goal=data.savingGoals.find(item=>item.request_id===request.id);const replies=data.reviews.filter(review=>review.request_id===request.id).length;const progress=goal?(goal.target?goal.current/goal.target:0):replies/3;const active=request.id===selected?.id;return <button key={request.id} className={active?styles.deviceWishActive:''} onClick={()=>void selectWish(request.id)}><small>{goal?'存钱中':'等朋友回信'}</small><b>{request.name}</b><span>{Math.round(Math.min(1,progress)*100)}%</span><i><em style={{width:`${Math.min(100,progress*100)}%`}}/></i>{active&&<strong>实体花当前心愿</strong>}</button>})}</div>{syncMessage&&<p className={styles.deviceSyncMessage}>{syncMessage}</p>}</section>}<article className={styles.devicePanel}><span className={styles.deviceLargeIcon}><Icon name="flower" size={42}/></span><small>此刻陪你关注</small><h2>{state.title}</h2><p>{statusLine}</p><div className={styles.largeProgress}><i style={{width:`${Math.round(state.progress*100)}%`}}/></div><b>{Math.round(state.progress*100)}%</b></article><section className={styles.deviceFacts}><h2>这朵花在看什么</h2><div><span>当前状态</span><b>{mode}</b></div><div><span>{remainingLabel}</span><b>{remainingValue}</b></div><p>网页会把 0～100% 的进度传给设备。舵机按同样比例在“闭合角”和“完全开放角”之间移动。</p></section></section>;
+  return <section className={styles.subPage}><PageHeader title="电子花" onBack={onBack}/><aside className={styles.deviceIntro}><span className={styles.deviceIntroIcon}><Icon name="flower" size={22}/></span><div><h2>电子花是什么？</h2><p>它把心愿进度变成一朵会慢慢开放的花。左右滑动卡片，再点一下，就能切换实体花正在陪伴的心愿。</p><small>不连接实体设备时，页面仍可单独使用。</small></div></aside><section className={styles.bluetoothPanel}><div className={styles.bluetoothPanelHeader}><div><small>手机蓝牙控制</small><h2>{bluetoothDevice?'HaoHaoHua 已连接':'连接实体花'}</h2></div><span className={bluetoothDevice?styles.bluetoothStatusConnected:styles.bluetoothStatus}><i/>{bluetoothDevice?'已连接':'未连接'}</span></div><p>使用 Android + Chrome，通过 HTTPS 连接队友的 ESP32。选择设备 HaoHaoHua 后，输入 0～100 的进度即可发送。</p><div className={styles.bluetoothActions}>{bluetoothDevice?<button type="button" className={styles.bluetoothSecondaryButton} onClick={disconnectBluetooth}>断开设备</button>:<button type="button" className={styles.bluetoothPrimaryButton} onClick={()=>void connectBluetooth()} disabled={bluetoothBusy}>{bluetoothBusy?'连接中…':'连接设备'}</button>}</div>{bluetoothDevice&&<form className={styles.bluetoothSendForm} onSubmit={submitBluetoothProgress}><label><span>存钱进度（0～100）</span><div><input aria-label="存钱进度 0 到 100" type="number" min="0" max="100" step="1" inputMode="numeric" value={sendProgress} onChange={event=>setSendProgress(event.target.value)}/><em>%</em></div></label><button type="submit" className={styles.bluetoothPrimaryButton} disabled={bluetoothBusy}>{bluetoothBusy?'发送中…':'提交 / 发送'}</button></form>}{bluetoothMessage&&<p className={styles.bluetoothMessage} role="status">{bluetoothMessage}</p>}{bluetoothError&&<p className={styles.bluetoothError} role="alert">{bluetoothError}</p>}<small className={styles.bluetoothHint}>服务 UUID：{HAOHAOHUA_BLUETOOTH.serviceUuid}<br/>特性 UUID：{HAOHAOHUA_BLUETOOTH.characteristicUuid}</small></section>{candidates.length>0&&<section className={styles.deviceWishSection}><div><b>切换心愿</b><small>新建和未完成的心愿会出现在这里</small></div><div className={styles.deviceWishRail}>{candidates.map(request=>{const goal=data.savingGoals.find(item=>item.request_id===request.id);const replies=data.reviews.filter(review=>review.request_id===request.id).length;const progress=goal?(goal.target?goal.current/goal.target:0):replies/3;const active=request.id===selected?.id;return <button key={request.id} className={active?styles.deviceWishActive:''} onClick={()=>void selectWish(request.id)}><small>{goal?'存钱中':'等朋友回信'}</small><b>{request.name}</b><span>{Math.round(Math.min(1,progress)*100)}%</span><i><em style={{width:`${Math.min(100,progress*100)}%`}}/></i>{active&&<strong>实体花当前心愿</strong>}</button>})}</div>{syncMessage&&<p className={styles.deviceSyncMessage}>{syncMessage}</p>}</section>}<article className={styles.devicePanel}><span className={styles.deviceLargeIcon}><Icon name="flower" size={42}/></span><small>此刻陪你关注</small><h2>{state.title}</h2><p>{statusLine}</p><div className={styles.largeProgress}><i style={{width:`${Math.round(state.progress*100)}%`}}/></div><b>{Math.round(state.progress*100)}%</b></article><section className={styles.deviceFacts}><h2>这朵花在看什么</h2><div><span>当前状态</span><b>{mode}</b></div><div><span>{remainingLabel}</span><b>{remainingValue}</b></div><p>网页会把 0～100% 的进度传给设备。舵机按同样比例在“闭合角”和“完全开放角”之间移动。</p></section></section>;
 }
 
 function SavingControl({goal,onAdd}:{goal:SavingGoal;onAdd:(amount:number)=>Promise<void>}){

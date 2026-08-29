@@ -1,106 +1,138 @@
 #include <Arduino.h>
 
+#include <BLE2902.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+
 #include "actuators.h"
 #include "app_config.h"
-#include "device_api.h"
 #include "device_state.h"
 #include "flower_ui.h"
-
-#if __has_include("secrets.h")
-#include "secrets.h"
-#else
-#include "secrets.example.h"
-#endif
 
 namespace {
 FlowerUi ui;
 Actuators actuators;
-DeviceApi api;
-
-DeviceState mockStates[] = {
-    {FlowerMode::SEED, "New wish", "Plant a wish", "", 0.08f, 78},
-    {FlowerMode::WAITING, "Iceland", "Waiting for friends", "", 0.34f, 82},
-    {FlowerMode::GROWING, "Camera", "Getting closer", "", 0.64f, 86},
-    {FlowerMode::BLOOM, "Camera", "You made it", "asset-demo", 1.0f, 100},
-    {FlowerMode::HEALTHY, "Dance class", "Value in use", "asset-demo", 0.78f, 92},
-    {FlowerMode::STRESSED, "A quick choice", "Take a breath", "asset-demo", 0.48f, 58},
-    {FlowerMode::THIRSTY, "Dance class", "Use me again", "asset-demo", 0.28f, 46},
-    {FlowerMode::RECOVERING, "Dance class", "Feeling better", "asset-demo", 0.70f, 74},
+DeviceState state = {
+    FlowerMode::WAITING,
+    "HaoHaoHua",
+    "Waiting for phone",
+    "",
+    0.0f,
+    80,
 };
-constexpr int mockStateCount = sizeof(mockStates) / sizeof(mockStates[0]);
 
-DeviceState state = mockStates[0];
-int mockIndex = 0;
-unsigned long lastMockChangeAt = 0;
-unsigned long lastRenderAt = 0;
+BLECharacteristic* commandCharacteristic = nullptr;
+volatile int targetPercent = -1;
+volatile bool phoneConnected = false;
 
-bool stableButton = HIGH;
-bool lastButtonReading = HIGH;
-unsigned long buttonChangedAt = 0;
+class ServerCallbacks final : public BLEServerCallbacks {
+ public:
+  void onConnect(BLEServer* server) override {
+    (void)server;
+    phoneConnected = true;
+    Serial.println("Phone connected over BLE");
+  }
 
-void applyMockState(int nextIndex) {
-  mockIndex = (nextIndex + mockStateCount) % mockStateCount;
-  state = mockStates[mockIndex];
-  actuators.onModeChanged(state.mode, millis());
-  Serial.printf("Mock state: %s\n", flowerModeName(state.mode));
+  void onDisconnect(BLEServer* server) override {
+    (void)server;
+    phoneConnected = false;
+    Serial.println("Phone disconnected from BLE");
+    BLEDevice::startAdvertising();
+  }
+};
+
+class CommandCallbacks final : public BLECharacteristicCallbacks {
+ public:
+  void onWrite(BLECharacteristic* characteristic) override {
+    String value = characteristic->getValue();
+    if (value.length() == 0) return;
+
+    Serial.print("Received BLE command: ");
+    Serial.println(value);
+    value.trim();
+    value.toLowerCase();
+
+    if (value == "full") {
+      targetPercent = 100;
+      return;
+    }
+
+    bool isNumber = true;
+    for (int index = 0; index < value.length(); ++index) {
+      if (!isDigit(value[index])) {
+        isNumber = false;
+        break;
+      }
+    }
+    if (!isNumber) {
+      Serial.println("Ignored BLE command: expected a number from 0 to 100");
+      return;
+    }
+
+    targetPercent = constrain(value.toInt(), 0, 100);
+  }
+};
+
+void beginBluetooth() {
+  BLEDevice::init(WB_BLE_DEVICE_NAME);
+  BLEServer* server = BLEDevice::createServer();
+  server->setCallbacks(new ServerCallbacks());
+
+  BLEService* service = server->createService(WB_BLE_SERVICE_UUID);
+  commandCharacteristic = service->createCharacteristic(
+      WB_BLE_COMMAND_CHARACTERISTIC_UUID,
+      BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
+  commandCharacteristic->addDescriptor(new BLE2902());
+  commandCharacteristic->setCallbacks(new CommandCallbacks());
+  service->start();
+
+  BLEAdvertising* advertising = BLEDevice::getAdvertising();
+  advertising->addServiceUUID(WB_BLE_SERVICE_UUID);
+  advertising->setScanResponse(true);
+  advertising->setMinPreferred(0x06);
+  advertising->setMinPreferred(0x12);
+  BLEDevice::startAdvertising();
+  Serial.printf("BLE advertising as %s\n", WB_BLE_DEVICE_NAME);
 }
 
-void handleButton(unsigned long now) {
-  const bool reading = digitalRead(WB_ACTION_BUTTON);
-  if (reading != lastButtonReading) {
-    buttonChangedAt = now;
-    lastButtonReading = reading;
-  }
-  if (now - buttonChangedAt < 35 || reading == stableButton) return;
-  stableButton = reading;
-  if (stableButton != LOW) return;
-
-  if (WB_ENABLE_NETWORK && !state.assetId.isEmpty()) {
-    const bool saved = api.reportUsedToday(state);
-    state.message = saved ? "Use recorded" : "Sync failed";
-    if (saved) {
-      state.mode = FlowerMode::RECOVERING;
-      state.health = min(100, state.health + 8);
-      actuators.onModeChanged(state.mode, now);
-    }
-  } else {
-    applyMockState(mockIndex + 1);
-    lastMockChangeAt = now;
-  }
+void applyProgressCommand(int percent, unsigned long now) {
+  percent = constrain(percent, 0, 100);
+  state.progress = static_cast<float>(percent) / 100.0f;
+  state.mode = percent >= 100 ? FlowerMode::BLOOM : FlowerMode::GROWING;
+  state.message = String(percent) + "% from phone";
+  state.health = percent >= 100 ? 100 : 80;
+  actuators.setProgress(percent, now);
+  Serial.printf("Progress set to %d%%\n", percent);
 }
 }
 
 void setup() {
   Serial.begin(115200);
   delay(250);
-  Serial.println("\nWorthBloom flower starting...");
-  pinMode(WB_ACTION_BUTTON, INPUT_PULLUP);
+  Serial.println("\nWorthBloom flower starting in BLE mode...");
 
   if (!ui.begin()) {
     Serial.println("Display init failed. Check that the selected board is ESP32-S3.");
   }
   actuators.begin();
-  api.begin();
+  beginBluetooth();
   actuators.onModeChanged(state.mode, millis());
-  lastMockChangeAt = millis();
 }
 
 void loop() {
   const unsigned long now = millis();
-  handleButton(now);
-
-  if (WB_ENABLE_NETWORK) {
-    const FlowerMode previousMode = state.mode;
-    if (api.update(state, now) && state.mode != previousMode) actuators.onModeChanged(state.mode, now);
-  } else if (now - lastMockChangeAt >= WB_MOCK_STATE_INTERVAL_MS) {
-    applyMockState(mockIndex + 1);
-    lastMockChangeAt = now;
+  const int nextPercent = targetPercent;
+  if (nextPercent >= 0) {
+    targetPercent = -1;
+    applyProgressCommand(nextPercent, now);
   }
 
   actuators.update(state, now);
+  static unsigned long lastRenderAt = 0;
   if (now - lastRenderAt >= WB_RENDER_INTERVAL_MS) {
     lastRenderAt = now;
-    ui.render(state, now, api.isOnline());
+    ui.render(state, now, phoneConnected);
   }
   delay(2);
 }
