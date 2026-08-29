@@ -231,13 +231,15 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
   }
   if (body.action === 'update_request') {
     const requestId=String(body.requestId??'');
-    const request=data.requests.find(item=>item.id===requestId);
-    if(!request)throw new LocalStoreError('没有找到这个心愿',404);
-    if(request.status!=='REVIEWING')throw new LocalStoreError('这个决定已经保存，可以复制为新心愿后继续调整。',409,'REQUEST_READ_ONLY');
+    const original=data.requests.find(item=>item.id===requestId);
+    if(!original)throw new LocalStoreError('没有找到这个心愿',404);
+    if(original.status!=='REVIEWING')throw new LocalStoreError('这个决定已经保存，可以复制为新心愿后继续调整。',409,'REQUEST_READ_ONLY');
     const expected=Number(body.expectedRevision);
-    const currentRev=Number(request.revision??1);
+    const currentRev=Number(original.revision??1);
     if(!Number.isFinite(expected)||expected!==currentRev)throw new LocalStoreError('心愿已在其他页面更新，请刷新后重试。',409,'REVISION_CONFLICT');
     const payload=body.payload as Record<string,unknown>;
+    // 先在副本上应用并校验，全部通过后才写回，避免校验失败留下半提交状态
+    const request={...original};
     if(typeof payload.name==='string')request.name=payload.name.trim().slice(0,80);
     if(typeof payload.price==='number')request.price=payload.price;
     if(typeof payload.reason==='string')request.reason=payload.reason.trim().slice(0,500);
@@ -263,6 +265,7 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     if(!String(request.concern??'').trim())throw new LocalStoreError('请填写或选择你最担心的问题',400,'concern');
     if(!request.type||!isKnownWishType(request.type))throw new LocalStoreError('请选择类型',400,'type');
     request.revision=currentRev+1; request.updatedAt=now(); request.similar_item=request.concern;
+    Object.assign(original,request);
     return { request:normalizeWish(request as unknown as Record<string,unknown>) };
   }
   if (body.action === 'create_invite') {
@@ -307,7 +310,7 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     let reflectionInput:ReturnType<typeof parseAssetReflectionPayload>;
     try{reflectionInput=parseAssetReflectionPayload(body)}catch(error){if(error instanceof AssetRuleError)throw new LocalStoreError(error.message,error.status);throw error}
     const {feeling,rating,wouldBuyAgain,note,trigger}=reflectionInput;const createdAt=now();
-    const reflection:AssetReflection={id:crypto.randomUUID(),asset_id:asset.id,asset_name:asset.name,asset_type:asset.type,feeling,rating,would_buy_again:wouldBuyAgain,note,trigger,usage_count:asset.usage_count,cost_per_use:costPerUse(asset),created_at:createdAt};data.assetReflections.unshift(reflection);if(trigger!=='MANUAL')asset.archived_at??=createdAt;return{reflection,asset};
+    const reflection:AssetReflection={id:crypto.randomUUID(),asset_id:asset.id,asset_name:asset.name,asset_type:asset.type,feeling,rating,would_buy_again:wouldBuyAgain,note,trigger,usage_count:asset.usage_count,cost_per_use:costPerUse(asset),created_at:createdAt};data.assetReflections.unshift(reflection);if(trigger!=='MANUAL')asset.archived_at??=createdAt;awardLocalGrowth('owner-preview','asset_reflection',asset.id,15);return{reflection,asset};
   }
   if (body.action === 'save_decision_note') {
     const request=data.requests.find(item=>item.id===String(body.requestId??'')); if(!request)throw new LocalStoreError('没有找到这个心愿',404);
@@ -321,7 +324,7 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     if(decision==='SAVE_FIRST'&&!data.savingGoals.some(item=>item.request_id===request.id))data.savingGoals.unshift({id:`saving-${request.id}`,request_id:request.id,name:request.name,target:request.price,current:0,weekly_plan:null,created_at:now()});
     let asset:Asset|null=null;const goal=data.savingGoals.find(item=>item.request_id===request.id)??null;
     if(decision==='BUY_NOW'&&!data.assets.some(item=>item.id===`asset-${request.id}`)){const type=assetTypeForRequest(request);asset={id:`asset-${request.id}`,request_id:request.id,name:request.name,type,purchase_price:request.price,total_units:type==='EXPERIENCE'?1:request.total_units ?? null,used_units:0,current_balance:type==='STORED_VALUE'?request.price:null,expiry_date:request.expiry_date ?? null,usage_count:0,last_used_at:null,bloom_until:new Date(Date.now()+20_000).toISOString()};data.assets.unshift(asset)}else if(decision==='BUY_NOW')asset=data.assets.find(item=>item.id===`asset-${request.id}`)??null;
-    awardLocalGrowth('owner-preview','wish_decision',request.id,40);
+    if(request.decision_note)awardLocalGrowth('owner-preview','decision_with_reason',request.id,20);
     return {ok:true,target:decision==='BUY_NOW'?'assets':decision==='SAVE_FIRST'?'saving':'wishes',goal,asset};
   }
   throw new LocalStoreError('不支持的操作');

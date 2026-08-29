@@ -395,7 +395,6 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
       const images = (payload.images as Array<Record<string, unknown>>).slice(0, 6).map((img, index) => ({ id: String(img.id ?? crypto.randomUUID()), url: String(img.url ?? ''), sortOrder: Number(img.sortOrder ?? index), isCover: Boolean(img.isCover) }));
       if (images.length && !images.some(img => img.isCover)) images[0].isCover = true;
       patch.images = images;
-      await saveDocument(collections.wishImages, `${requestId}-images`, { owner_id: ownerId, request_id: requestId, images, updated_at: now() });
     }
     const nextName=String(patch.name??request.name??'').trim();
     const nextReason=String(patch.reason??request.reason??'').trim();
@@ -407,6 +406,8 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     if(!Number.isFinite(nextPrice)||nextPrice<0||nextPrice>99_999_999.99)throw new CloudBaseStoreError('请填写有效价格',400,'price');
     if(!nextConcern)throw new CloudBaseStoreError('请填写或选择你最担心的问题',400,'concern');
     if(!isKnownWishType(nextType))throw new CloudBaseStoreError('请选择类型',400,'type');
+    // 校验全部通过后再写图片，避免校验失败留下半提交状态
+    if (Array.isArray(patch.images)) await saveDocument(collections.wishImages, `${requestId}-images`, { owner_id: ownerId, request_id: requestId, images: patch.images, updated_at: now() });
     patch.revision = currentRev + 1;
     patch.updatedAt = now();
     patch.similar_item = patch.concern ?? request.similar_item;
@@ -520,6 +521,7 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     await saveDocument(collections.reflections, reflection.id, { ...reflection, owner_id: ownerId });
     const archivedAt=trigger==='MANUAL' ? asset.archived_at??null : asset.archived_at??createdAt;
     if(trigger!=='MANUAL')await db.collection(collections.assets).doc(assetId).update({archived_at:archivedAt});
+    await awardCloudBaseGrowth(ownerId,'asset_reflection',assetId,15);
     return { reflection,asset:{...asset,archived_at:archivedAt} };
   }
 
@@ -543,7 +545,7 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     const status = decision === 'BUY_NOW' ? 'PURCHASED' : decision === 'SAVE_FIRST' ? 'SAVING' : 'ARCHIVED';
     await db.collection(collections.requests).doc(requestId).update(note ? { status, decision_note: note } : { status });
     await saveDocument(collections.decisions, `decision-${requestId}`, { owner_id: ownerId, request_id: requestId, decision, decided_at: now() });
-    await awardCloudBaseGrowth(ownerId, 'wish_decision', requestId, 40);
+    if (note) await awardCloudBaseGrowth(ownerId, 'decision_with_reason', requestId, 20);
     const invites = (await ownerDocuments(collections.invites, ownerId)).filter(item => item.request_id === requestId);
     await Promise.all(invites.map(invite => db.collection(collections.invites).doc(String(invite.id || invite._id)).update({ revoked: 1 })));
 

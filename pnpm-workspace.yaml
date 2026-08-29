@@ -1,6 +1,8 @@
 allowBuilds:
+  '@google/genai': false
   core-js-pure: true
   esbuild: true
+  protobufjs: false
   sharp: true
   unrs-resolver: true
   workerd: true

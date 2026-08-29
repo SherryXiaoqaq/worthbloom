@@ -1,9 +1,9 @@
 # WorthBloom AI 助手配置
 
-P1 默认接入智谱免费模型：
+当前按能力拆分模型供应商：
 
 - `glm-4.6v-flash`：读取商品截图并提取名称、价格、次数和有效期。
-- `glm-4.7-flash`：综合自己的购买理由与朋友留言，给出购买、先存钱或放弃的倾向建议。
+- `deepseek-v4-flash`：驱动 Pi Runtime 下的四个 AI 决策顾问及圆桌讨论。
 
 模型只预填表单、整理观点，不会自动创建心愿，也不会代替用户点击最终决定。
 
@@ -24,9 +24,13 @@ ZHIPU_VISION_MODEL=glm-4.6v-flash
 ZHIPU_TEXT_MODEL=glm-4.7-flash
 ZHIPU_VISION_FALLBACK_MODEL=glm-4v-flash
 ZHIPU_TEXT_FALLBACK_MODEL=glm-4-flash-250414
+
+OPENAI_NEXT_API_KEY=替换成 OpenAI Next Credits 创建的项目密钥
+OPENAI_NEXT_BASE_URL=https://api.openai-next.com/v1
+DEEPSEEK_AGENT_MODEL=deepseek-v4-flash
 ```
 
-后两项是免费备用模型。主模型出现限流或繁忙时，服务端会自动切换；已经创建过 `.env.local` 的项目不补这两行也会使用默认备用值。
+智谱配置用于截图等视觉识别；OpenAI Next 网关中的 `deepseek-v4-flash` 只用于 AI 决策顾问团。没有配置网关 Key 时，顾问团会进入明确标记的规则演示模式，不会借用视觉模型冒充 Agent 输出。
 
 保存后必须重启开发服务器：
 
@@ -38,7 +42,7 @@ pnpm.cmd dev:lan
 
 ## 3. 上线配置
 
-部署到 CloudBase Run 或 Cloudflare 时，在项目的“环境变量 / Secrets”设置中添加上述配置项。`ZHIPU_API_KEY` 必须设为 Secret；模型名和基础地址可以是普通服务端变量。不要把真实值写入仓库。
+部署到 CloudBase Run 或 Cloudflare 时，在项目的“环境变量 / Secrets”设置中添加上述配置项。`ZHIPU_API_KEY` 与 `OPENAI_NEXT_API_KEY` 必须设为 Secret；模型名和基础地址可以是普通服务端变量。不要把真实值写入仓库。
 
 ## 4. 使用与限制
 
@@ -52,3 +56,5 @@ pnpm.cmd dev:lan
 
 - [GLM-4.6V-Flash](https://docs.bigmodel.cn/cn/guide/models/free/glm-4.6v-flash)
 - [智谱模型概览](https://docs.bigmodel.cn/cn/guide/start/model-overview)
+- [DeepSeek API 文档](https://api-docs.deepseek.com/)
+- [OpenAI Next Credits 接入指南](https://open-dev.feishu.cn/docx/H78cdh48EoTsYvxnDbgcnSKAnGc)

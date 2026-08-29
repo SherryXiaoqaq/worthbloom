@@ -10,10 +10,14 @@
     "dev:lan": "next dev --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "eval:agent": "node tests/evals/validate-agent-cases.mjs",
+    "eval:agent:api": "node tests/evals/smoke-agent-api.mjs"
   },
   "dependencies": {
     "@cloudbase/js-sdk": "^3.8.1",
+    "@earendil-works/pi-agent-core": "0.84.3",
+    "@earendil-works/pi-ai": "0.84.3",
     "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6",

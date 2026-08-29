@@ -5,334 +5,101 @@ import { getCloudBaseDb } from '@/lib/server/cloudbase-http-db';
 import { getLocalData, isLocalPreview } from '@/lib/server/local-store';
 import { isOwnerRequest } from '@/lib/server/owner';
 import { normalizeWish, normalizeReview } from '@/lib/wish-compat';
-import { agentComplete, agentNextQuestion, AGENT_MAX_QUESTIONS, fallbackQuestion } from '@/lib/server/agent';
-import type { AgentMessage, AgentReport, AgentSession, PurchaseRequest, Review } from '@/lib/types';
+import { agentComplete, agentNextQuestion, runRoundtable, runRoundtableFollowup } from '@/lib/server/agent';
+import type { AgentMessage, AgentProfileId, AgentReport, AgentSession, AgentSessionMode, PurchaseRequest, Review } from '@/lib/types';
 import { AiServiceError } from '@/lib/server/ai/client';
 
 export const dynamic = 'force-dynamic';
+type Body={action:string;requestId?:string;expectedRevision?:number;sessionId?:string;answer?:string;skipped?:boolean;confirmed?:boolean;profileId?:AgentProfileId;mode?:AgentSessionMode;forceNew?:boolean;topic?:string;profiles?:AgentProfileId[];clientMessageId?:string};
+const PROFILES=new Set<AgentProfileId>(['QUICK_DECISION','RATIONAL_ANALYST','REVIEW_SYNTHESIZER','NAVAL_LENS']);
+const localSessions=new Map<string,AgentSession>();
+const fail=(error:string,status:number,code?:string)=>Response.json({error,code},{status});
+const profile=(value:unknown):AgentProfileId=>PROFILES.has(value as AgentProfileId)?value as AgentProfileId:'QUICK_DECISION';
+const mode=(value:unknown):AgentSessionMode=>value==='ROUNDTABLE'?'ROUNDTABLE':'SINGLE';
+function parseObject(value:unknown){if(!value)return undefined;if(typeof value==='object')return value as Record<string,unknown>;try{return JSON.parse(String(value)) as Record<string,unknown>}catch{return undefined}}
+function isReady(session:AgentSession){return Boolean(['IN_PROGRESS','PAUSED'].includes(session.status)&&session.messages.at(-1)?.payload?.canGenerateReport)}
 
-function fail(error: string, status: number, code?: string) {
-  return Response.json({ error, code }, { status });
+async function context(req:Request,id:string,owner:string):Promise<{request:PurchaseRequest;reviews:Review[]}|null>{
+  if(isCloudBaseServerConfigured()){const db=getCloudBaseDb(),wish=(await db.collection('purchase_requests').doc(id).get()).data?.[0] as Record<string,unknown>|undefined;if(!wish||String(wish.owner_id??'')!==owner)return null;const rows=(await db.collection('reviews').where({request_id:id}).get()).data||[];return{request:normalizeWish(wish),reviews:(rows as Record<string,unknown>[]).filter(row=>String(row.owner_id??'')===owner).map(normalizeReview)}}
+  if(isLocalPreview(req)){const data=getLocalData(),wish=data.requests.find(item=>item.id===id);return wish?{request:wish,reviews:data.reviews.filter(item=>item.request_id===id)}:null}
+  const db=await getDb(),wish=await db.prepare('SELECT * FROM purchase_requests WHERE id=?').bind(id).first<Record<string,unknown>>();if(!wish)return null;const [reviews,images]=await Promise.all([db.prepare('SELECT * FROM reviews WHERE request_id=? ORDER BY created_at DESC').bind(id).all(),db.prepare('SELECT id,url,sort_order,is_cover FROM wish_images WHERE request_id=? ORDER BY sort_order').bind(id).all()]);wish.images=(images.results as Record<string,unknown>[]).map(row=>({id:String(row.id),url:String(row.url),sortOrder:Number(row.sort_order),isCover:Boolean(row.is_cover)}));return{request:normalizeWish(wish),reviews:(reviews.results as Record<string,unknown>[]).map(normalizeReview)}
 }
 
-// ---- local preview in-memory sessions ----
-const localSessions = new Map<string, AgentSession>();
+function rowMessage(row:Record<string,unknown>):AgentMessage{return{id:String(row.id),role:String(row.role) as AgentMessage['role'],content:String(row.content??''),questionId:row.question_id?String(row.question_id):undefined,skipped:Boolean(row.skipped),agentProfileId:row.agent_profile_id?profile(row.agent_profile_id):undefined,payload:parseObject(row.payload_json) as AgentMessage['payload'],createdAt:String(row.created_at)}}
+function makeSession(doc:Record<string,unknown>,messages:AgentMessage[],report?:AgentReport):AgentSession{return{id:String(doc.id||doc._id),requestId:String(doc.request_id),requestRevision:Number(doc.request_revision||1),status:String(doc.status||'IN_PROGRESS') as AgentSession['status'],mode:mode(doc.mode),agentProfileId:profile(doc.agent_profile_id),promptVersion:String(doc.prompt_version||'prompt_v1'),summary:doc.summary?String(doc.summary):undefined,metadata:parseObject(doc.metadata_json),messages,report,questionCount:Number(doc.question_count||0),createdAt:String(doc.created_at),updatedAt:String(doc.updated_at)}}
 
-async function loadContext(request: Request, requestId: string, ownerId: string): Promise<{ request: PurchaseRequest; reviews: Review[] } | null> {
-  if (isCloudBaseServerConfigured()) {
-    const db = getCloudBaseDb();
-    const reqDoc = await db.collection('purchase_requests').doc(requestId).get();
-    const req = (reqDoc.data || [])[0] as Record<string, unknown> | undefined;
-    if (!req || String(req.owner_id ?? '') !== ownerId) return null;
-    const revDocs = await db.collection('reviews').where({ request_id: requestId }).get();
-    return {
-      request: normalizeWish(req as Record<string, unknown>),
-      reviews: ((revDocs.data || []) as Record<string, unknown>[])
-        .filter(review => String(review.owner_id ?? '') === ownerId)
-        .map(normalizeReview),
-    };
-  }
-  if (isLocalPreview(request)) {
-    const data = getLocalData();
-    const req = data.requests.find(r => r.id === requestId);
-    if (!req) return null;
-    return { request: req, reviews: data.reviews.filter(r => r.request_id === requestId) };
-  }
-  const db = await getDb();
-  const reqRow = await db.prepare(`SELECT * FROM purchase_requests WHERE id = ?`).bind(requestId).first<Record<string, unknown>>();
-  if (!reqRow) return null;
-  const revRows = await db.prepare(`SELECT * FROM reviews WHERE request_id = ? ORDER BY created_at DESC`).bind(requestId).all();
-  const imgRows = await db.prepare(`SELECT id, url, sort_order, is_cover FROM wish_images WHERE request_id = ? ORDER BY sort_order`).bind(requestId).all();
-  reqRow.images = (imgRows.results as Record<string, unknown>[]).map(img => ({ id: String(img.id), url: String(img.url), sortOrder: Number(img.sort_order), isCover: Boolean(img.is_cover) }));
-  return { request: normalizeWish(reqRow), reviews: (revRows.results as Record<string, unknown>[]).map(normalizeReview) };
-}
+async function d1Load(id:string){const db=await getDb(),doc=await db.prepare('SELECT * FROM agent_sessions WHERE id=?').bind(id).first<Record<string,unknown>>();if(!doc)return null;const [messages,report]=await Promise.all([db.prepare('SELECT * FROM agent_messages WHERE session_id=? ORDER BY created_at').bind(id).all(),db.prepare('SELECT report_json FROM agent_reports WHERE session_id=?').bind(id).first<{report_json:string}>()]);return makeSession(doc,(messages.results as Record<string,unknown>[]).map(rowMessage),report?JSON.parse(report.report_json) as AgentReport:undefined)}
+// 轻量摘要列表：单条 SQL 读 sessions 表行，不逐个加载 messages/report（避免 N+1）。
+async function d1List(id:string){const db=await getDb(),rows=await db.prepare('SELECT * FROM agent_sessions WHERE request_id=? ORDER BY updated_at DESC').bind(id).all<Record<string,unknown>>();return rows.results.map(doc=>makeSession(doc,[],undefined))}
+// 单条查询现存会话（含 messages），load/start_session 用它替代全量 list()。
+async function d1FindOne(id:string,p:AgentProfileId,m:AgentSessionMode){const db=await getDb(),doc=await db.prepare('SELECT id FROM agent_sessions WHERE request_id=? AND request_revision=(SELECT MAX(request_revision) FROM agent_sessions WHERE request_id=?) AND agent_profile_id=? AND mode=? AND status IN (\'IN_PROGRESS\',\'PAUSED\') ORDER BY updated_at DESC LIMIT 1').bind(id,id,p,m).first<{id:string}>();return doc?d1Load(doc.id):null}
+async function d1Create(id:string,revision:number,p:AgentProfileId,m:AgentSessionMode){const db=await getDb(),sessionId=crypto.randomUUID(),ts=new Date().toISOString();await db.prepare('INSERT INTO agent_sessions (id,request_id,request_revision,status,question_count,mode,agent_profile_id,prompt_version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(sessionId,id,revision,'IN_PROGRESS',0,m,p,'prompt_v2',ts,ts).run();return{id:sessionId,requestId:id,requestRevision:revision,status:'IN_PROGRESS',mode:m,agentProfileId:p,promptVersion:'prompt_v2',messages:[],questionCount:0,createdAt:ts,updatedAt:ts} as AgentSession}
+async function d1Add(session:AgentSession,message:AgentMessage){const db=await getDb(),count=session.questionCount+(message.role==='ASSISTANT'&&message.questionId?1:0);await db.prepare('INSERT INTO agent_messages (id,session_id,role,content,question_id,skipped,agent_profile_id,payload_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)').bind(message.id,session.id,message.role,message.content,message.questionId??null,message.skipped?1:0,message.agentProfileId??session.agentProfileId,message.payload?JSON.stringify(message.payload):null,message.createdAt).run();await db.prepare('UPDATE agent_sessions SET question_count=?,updated_at=? WHERE id=?').bind(count,message.createdAt,session.id).run();session.messages.push(message);session.questionCount=count;session.updatedAt=message.createdAt}
+async function d1Update(session:AgentSession,status:AgentSession['status'],report?:AgentReport,metadata?:Record<string,unknown>){const db=await getDb(),ts=new Date().toISOString(),summary=report?.motives?.[0]?.text||session.summary||null;await db.prepare('UPDATE agent_sessions SET status=?,summary=?,metadata_json=?,updated_at=? WHERE id=?').bind(status,summary,metadata?JSON.stringify(metadata):session.metadata?JSON.stringify(session.metadata):null,ts,session.id).run();if(report)await db.prepare('INSERT INTO agent_reports (session_id,report_json,created_at) VALUES (?,?,?) ON CONFLICT(session_id) DO UPDATE SET report_json=excluded.report_json,created_at=excluded.created_at').bind(session.id,JSON.stringify(report),ts).run();Object.assign(session,{status,report:report||session.report,summary:summary||undefined,metadata:metadata||session.metadata,updatedAt:ts})}
 
-// ---- D1 session ops ----
-async function d1LoadSession(sessionId: string): Promise<AgentSession | null> {
-  const db = await getDb();
-  const s = await db.prepare(`SELECT * FROM agent_sessions WHERE id = ?`).bind(sessionId).first<Record<string, unknown>>();
-  if (!s) return null;
-  const msgs = await db.prepare(`SELECT * FROM agent_messages WHERE session_id = ? ORDER BY created_at`).bind(sessionId).all();
-  const rep = await db.prepare(`SELECT report_json FROM agent_reports WHERE session_id = ?`).bind(sessionId).first<{ report_json: string }>();
-  return {
-    id: String(s.id), requestId: String(s.request_id), requestRevision: Number(s.request_revision),
-    status: String(s.status) as AgentSession['status'],
-    messages: (msgs.results as Record<string, unknown>[]).map(m => ({ id: String(m.id), role: String(m.role) as AgentMessage['role'], content: String(m.content), questionId: m.question_id ? String(m.question_id) : undefined, skipped: Boolean(m.skipped), createdAt: String(m.created_at) })),
-    report: rep ? JSON.parse(rep.report_json) as AgentReport : undefined,
-    questionCount: Number(s.question_count), createdAt: String(s.created_at), updatedAt: String(s.updated_at),
-  };
-}
+async function cloudLoad(id:string,owner:string){const db=getCloudBaseDb(),doc=(await db.collection('agent_sessions').doc(id).get()).data?.[0] as Record<string,unknown>|undefined;if(!doc||String(doc.owner_id??'')!==owner)return null;const [messageResult,reportResult]=await Promise.all([db.collection('agent_messages').where({session_id:id,owner_id:owner}).get(),db.collection('agent_reports').where({session_id:id,owner_id:owner}).limit(1).get()]);const messages=((messageResult.data||[]) as Record<string,unknown>[]).sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at))).map(rowMessage);const reportDoc=(reportResult.data||[])[0] as Record<string,unknown>|undefined;let report:AgentReport|undefined;try{if(reportDoc?.report_json)report=JSON.parse(String(reportDoc.report_json)) as AgentReport}catch{/* legacy malformed report */}return makeSession(doc,messages,report)}
+// 轻量摘要列表：只读 sessions 集合行，不逐个加载 messages（避免 N+1）。
+async function cloudList(id:string,owner:string){const rows=(await getCloudBaseDb().collection('agent_sessions').where({owner_id:owner,request_id:id}).limit(100).get()).data||[];return(rows as Record<string,unknown>[]).map(doc=>makeSession(doc,[],undefined)).sort((a,b)=>Date.parse(b.updatedAt)-Date.parse(a.updatedAt))}
+async function cloudFindOne(id:string,p:AgentProfileId,m:AgentSessionMode,owner:string){const rows=(await getCloudBaseDb().collection('agent_sessions').where({owner_id:owner,request_id:id,agent_profile_id:p,mode:m}).limit(20).get()).data||[];const candidates=(rows as Record<string,unknown>[]).filter(row=>['IN_PROGRESS','PAUSED'].includes(String(row.status))).sort((a,b)=>Date.parse(String(b.updated_at))-Date.parse(String(a.updated_at)));const target=candidates[0];return target?cloudLoad(String(target.id||target._id),owner):null}
+async function cloudCreate(id:string,revision:number,p:AgentProfileId,m:AgentSessionMode,owner:string){const db=getCloudBaseDb(),sessionId=crypto.randomUUID(),ts=new Date().toISOString();await db.collection('agent_sessions').doc(sessionId).set({id:sessionId,owner_id:owner,request_id:id,request_revision:revision,status:'IN_PROGRESS',question_count:0,mode:m,agent_profile_id:p,prompt_version:'prompt_v2',created_at:ts,updated_at:ts});return{id:sessionId,requestId:id,requestRevision:revision,status:'IN_PROGRESS',mode:m,agentProfileId:p,promptVersion:'prompt_v2',messages:[],questionCount:0,createdAt:ts,updatedAt:ts} as AgentSession}
+async function cloudAdd(session:AgentSession,message:AgentMessage,owner:string){const db=getCloudBaseDb(),count=session.questionCount+(message.role==='ASSISTANT'&&message.questionId?1:0);await db.collection('agent_messages').doc(message.id).set({id:message.id,owner_id:owner,session_id:session.id,role:message.role,content:message.content,question_id:message.questionId??null,skipped:message.skipped?1:0,agent_profile_id:message.agentProfileId??session.agentProfileId,payload_json:message.payload?JSON.stringify(message.payload):null,created_at:message.createdAt});await db.collection('agent_sessions').doc(session.id).update({question_count:count,updated_at:message.createdAt});session.messages.push(message);session.questionCount=count;session.updatedAt=message.createdAt}
+async function cloudUpdate(session:AgentSession,status:AgentSession['status'],owner:string,report?:AgentReport,metadata?:Record<string,unknown>){const db=getCloudBaseDb(),ts=new Date().toISOString(),summary=report?.motives?.[0]?.text||session.summary||null;await db.collection('agent_sessions').doc(session.id).update({status,summary,metadata_json:metadata?JSON.stringify(metadata):session.metadata?JSON.stringify(session.metadata):null,updated_at:ts});if(report)await db.collection('agent_reports').doc(session.id).set({owner_id:owner,session_id:session.id,report_json:JSON.stringify(report),created_at:ts});Object.assign(session,{status,report:report||session.report,summary:summary||undefined,metadata:metadata||session.metadata,updatedAt:ts})}
 
-async function d1FindInProgress(requestId: string, revision: number): Promise<AgentSession | null> {
-  const db = await getDb();
-  const s = await db.prepare(`SELECT * FROM agent_sessions WHERE request_id = ? AND request_revision = ? AND status = 'IN_PROGRESS' ORDER BY created_at DESC LIMIT 1`).bind(requestId, revision).first<Record<string, unknown>>();
-  if (!s) return null;
-  return d1LoadSession(String(s.id));
-}
-
-async function d1FindLatest(requestId: string, revision: number): Promise<AgentSession | null> {
-  const db = await getDb();
-  const s = await db.prepare(`SELECT id FROM agent_sessions WHERE request_id = ? AND request_revision = ? ORDER BY updated_at DESC, created_at DESC LIMIT 1`).bind(requestId, revision).first<{ id: string }>();
-  return s ? d1LoadSession(String(s.id)) : null;
-}
-
-async function d1StartSession(requestId: string, revision: number): Promise<AgentSession> {
-  const db = await getDb();
-  const id = crypto.randomUUID(); const ts = new Date().toISOString();
-  await db.prepare(`INSERT INTO agent_sessions (id, request_id, request_revision, status, question_count, created_at, updated_at) VALUES (?,?,?,?,0,?,?)`).bind(id, requestId, revision, 'IN_PROGRESS', ts, ts).run();
-  return { id, requestId, requestRevision: revision, status: 'IN_PROGRESS', messages: [], questionCount: 0, createdAt: ts, updatedAt: ts };
-}
-
-async function d1AddMessage(session: AgentSession, msg: AgentMessage) {
-  const db = await getDb();
-  await db.prepare(`INSERT INTO agent_messages (id, session_id, role, content, question_id, skipped, created_at) VALUES (?,?,?,?,?,?,?)`).bind(msg.id, session.id, msg.role, msg.content, msg.questionId ?? null, msg.skipped ? 1 : 0, msg.createdAt).run();
-  const qc = session.questionCount + (msg.role === 'ASSISTANT' && msg.questionId ? 1 : 0);
-  await db.prepare(`UPDATE agent_sessions SET question_count = ?, updated_at = ? WHERE id = ?`).bind(qc, msg.createdAt, session.id).run();
-  session.messages.push(msg); session.questionCount = qc; session.updatedAt = msg.createdAt;
-}
-
-async function d1SetStatus(session: AgentSession, status: AgentSession['status'], report?: AgentReport) {
-  const db = await getDb();
-  const ts = new Date().toISOString();
-  await db.prepare(`UPDATE agent_sessions SET status = ?, updated_at = ? WHERE id = ?`).bind(status, ts, session.id).run();
-  if (report) await db.prepare(`INSERT INTO agent_reports (session_id, report_json, created_at) VALUES (?,?,?) ON CONFLICT(session_id) DO UPDATE SET report_json=excluded.report_json`).bind(session.id, JSON.stringify(report), ts).run();
-  session.status = status; session.report = report; session.updatedAt = ts;
-}
-
-async function cloudBaseLoadSession(sessionId: string, ownerId: string): Promise<AgentSession | null> {
-  const db = getCloudBaseDb();
-  const doc = (await db.collection('agent_sessions').doc(sessionId).get()).data?.[0] as Record<string, unknown> | undefined;
-  if (!doc || String(doc.owner_id ?? '') !== ownerId) return null;
-  const [messageResult, reportResult] = await Promise.all([
-    db.collection('agent_messages').where({ session_id: sessionId, owner_id: ownerId }).get(),
-    db.collection('agent_reports').where({ session_id: sessionId, owner_id: ownerId }).limit(1).get(),
-  ]);
-  const messages = ((messageResult.data || []) as Record<string, unknown>[])
-    .sort((left, right) => String(left.created_at ?? '').localeCompare(String(right.created_at ?? '')))
-    .map(message => ({
-      id: String(message.id || message._id || ''),
-      role: String(message.role) as AgentMessage['role'],
-      content: String(message.content ?? ''),
-      questionId: message.question_id ? String(message.question_id) : undefined,
-      skipped: Boolean(message.skipped),
-      createdAt: String(message.created_at),
-    }));
-  const reportDoc = (reportResult.data || [])[0] as Record<string, unknown> | undefined;
-  let report: AgentReport | undefined;
-  if (reportDoc?.report_json) {
-    try { report = JSON.parse(String(reportDoc.report_json)) as AgentReport; } catch { report = undefined; }
-  }
-  return {
-    id: sessionId,
-    requestId: String(doc.request_id),
-    requestRevision: Number(doc.request_revision),
-    status: String(doc.status) as AgentSession['status'],
-    messages,
-    report,
-    questionCount: Number(doc.question_count ?? 0),
-    createdAt: String(doc.created_at),
-    updatedAt: String(doc.updated_at),
-  };
-}
-
-async function cloudBaseAddMessage(session: AgentSession, message: AgentMessage, ownerId: string) {
-  const db = getCloudBaseDb();
-  const questionCount = session.questionCount + (message.role === 'ASSISTANT' && message.questionId ? 1 : 0);
-  await db.collection('agent_messages').doc(message.id).set({
-    id: message.id,
-    owner_id: ownerId,
-    session_id: session.id,
-    role: message.role,
-    content: message.content,
-    question_id: message.questionId ?? null,
-    skipped: message.skipped ? 1 : 0,
-    created_at: message.createdAt,
-  });
-  await db.collection('agent_sessions').doc(session.id).update({ question_count: questionCount, updated_at: message.createdAt });
-  session.messages.push(message);
-  session.questionCount = questionCount;
-  session.updatedAt = message.createdAt;
-}
-
-async function cloudBaseSetStatus(session: AgentSession, status: AgentSession['status'], ownerId: string, report?: AgentReport) {
-  const db = getCloudBaseDb();
-  const updatedAt = new Date().toISOString();
-  await db.collection('agent_sessions').doc(session.id).update({ status, updated_at: updatedAt });
-  if (report) {
-    await db.collection('agent_reports').doc(session.id).set({
-      owner_id: ownerId,
-      session_id: session.id,
-      report_json: JSON.stringify(report),
-      created_at: updatedAt,
-    });
-  }
-  session.status = status;
-  session.report = report;
-  session.updatedAt = updatedAt;
-}
-
-export async function POST(request: Request) {
-  let userId: string;
-  if (isCloudBaseServerConfigured()) {
-    try { const u = await requireCloudBaseUser(request); userId = u.id; } catch { return fail('请先登录', 401, 'AUTH_REQUIRED'); }
-  } else if (!isOwnerRequest(request.headers)) {
-    return fail('请先登录', 401, 'AUTH_REQUIRED');
-  } else { userId = 'owner-preview'; }
-
-  const body = await request.json() as { action: string; requestId?: string; expectedRevision?: number; sessionId?: string; answer?: string; skipped?: boolean; confirmed?: boolean };
-  const useCloudBase = isCloudBaseServerConfigured();
-  const useLocal = !useCloudBase && isLocalPreview(request);
-
-  try {
-    if (body.action === 'load') {
-      const requestId = String(body.requestId ?? '');
-      const expected = Number(body.expectedRevision);
-      const ctx = await loadContext(request, requestId, userId);
-      if (!ctx) return fail('没有找到这个心愿', 404, 'NOT_FOUND');
-      const rev = ctx.request.revision ?? 1;
-      if (!Number.isFinite(expected) || expected !== rev) return fail('心愿已被修改，请基于最新版本加载对话', 409, 'REVISION_CONFLICT');
-
-      let session: AgentSession | null = null;
-      if (useLocal) {
-        session = [...localSessions.values()]
-          .filter(item => item.requestId === requestId && item.requestRevision === rev)
-          .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0] ?? null;
-      } else if (!useCloudBase) {
-        session = await d1FindLatest(requestId, rev);
-      } else {
-        const db = getCloudBaseDb();
-        const res = await db.collection('agent_sessions').where({ owner_id: userId, request_id: requestId, request_revision: rev }).limit(100).get();
-        const docs = (res.data || []) as Record<string, unknown>[];
-        docs.sort((left, right) => String(right.updated_at ?? right.created_at ?? '').localeCompare(String(left.updated_at ?? left.created_at ?? '')));
-        const latest = docs[0];
-        if (latest) session = await cloudBaseLoadSession(String(latest.id || latest._id || ''), userId);
-      }
-      const readyToComplete = Boolean(session && session.status === 'IN_PROGRESS' && (session.questionCount >= AGENT_MAX_QUESTIONS || session.messages.at(-1)?.role === 'USER'));
-      return Response.json({ session, readyToComplete });
+export async function POST(request:Request){
+  let owner:string;if(isCloudBaseServerConfigured()){try{owner=(await requireCloudBaseUser(request)).id}catch{return fail('请先登录',401,'AUTH_REQUIRED')}}else if(!isOwnerRequest(request.headers))return fail('请先登录',401,'AUTH_REQUIRED');else owner='owner-preview';
+  const body=await request.json() as Body,useCloud=isCloudBaseServerConfigured(),useLocal=!useCloud&&isLocalPreview(request);
+  const list=(id:string)=>useLocal?Promise.resolve([...localSessions.values()].filter(item=>item.requestId===id).sort((a,b)=>Date.parse(b.updatedAt)-Date.parse(a.updatedAt))):useCloud?cloudList(id,owner):d1List(id);
+  const load=(id:string)=>useLocal?Promise.resolve(localSessions.get(id)||null):useCloud?cloudLoad(id,owner):d1Load(id);
+  const findOne=(id:string,p:AgentProfileId,m:AgentSessionMode)=>useLocal?Promise.resolve([...localSessions.values()].filter(item=>item.requestId===id&&item.agentProfileId===p&&item.mode===m&&['IN_PROGRESS','PAUSED'].includes(item.status)).sort((a,b)=>Date.parse(b.updatedAt)-Date.parse(a.updatedAt))[0]||null):useCloud?cloudFindOne(id,p,m,owner):d1FindOne(id,p,m);
+  const create=async(id:string,revision:number,p:AgentProfileId,m:AgentSessionMode)=>{if(useLocal){const ts=new Date().toISOString(),session:AgentSession={id:crypto.randomUUID(),requestId:id,requestRevision:revision,status:'IN_PROGRESS',mode:m,agentProfileId:p,promptVersion:'prompt_v2',messages:[],questionCount:0,createdAt:ts,updatedAt:ts};localSessions.set(session.id,session);return session}return useCloud?cloudCreate(id,revision,p,m,owner):d1Create(id,revision,p,m)};
+  const add=async(session:AgentSession,message:AgentMessage)=>{if(useLocal){session.messages.push(message);if(message.role==='ASSISTANT'&&message.questionId)session.questionCount++;session.updatedAt=message.createdAt}else if(useCloud)await cloudAdd(session,message,owner);else await d1Add(session,message)};
+  const update=async(session:AgentSession,status:AgentSession['status'],report?:AgentReport,metadata?:Record<string,unknown>)=>{if(useLocal)Object.assign(session,{status,report:report||session.report,metadata:metadata||session.metadata,updatedAt:new Date().toISOString()});else if(useCloud)await cloudUpdate(session,status,owner,report,metadata);else await d1Update(session,status,report,metadata)};
+  const current=async()=>{const id=String(body.requestId||''),ctx=await context(request,id,owner);if(!ctx)return{response:fail('没有找到这个心愿',404,'NOT_FOUND')} as const;const revision=ctx.request.revision??1;if(Number(body.expectedRevision)!==revision)return{response:fail('心愿已被修改，请基于最新版本继续',409,'REVISION_CONFLICT')} as const;return{id,ctx,revision} as const};
+  // spec §7.2: history listing must survive wish edits — stale sessions stay visible with their revision.
+  const currentAny=async()=>{const id=String(body.requestId||''),ctx=await context(request,id,owner);if(!ctx)return{response:fail('没有找到这个心愿',404,'NOT_FOUND')} as const;return{id,ctx,revision:ctx.request.revision??1} as const};
+  try{
+    if(body.action==='load'||body.action==='list_sessions'){const value=await currentAny();if('response'in value)return value.response;const sessions=await list(value.id),summaries=sessions.map(session=>({id:session.id,mode:session.mode,agentProfileId:session.agentProfileId,status:session.status,summary:session.summary||'历史对话',updatedAt:session.updatedAt,requestRevision:session.requestRevision,stale:session.requestRevision!==value.revision}));if(body.action==='load'){const p=body.profileId?profile(body.profileId):null;const pick=summaries.filter(item=>item.requestRevision===value.revision&&(!p||item.agentProfileId===p)&&item.mode==='SINGLE');const target=pick.find(item=>['IN_PROGRESS','PAUSED'].includes(item.status))||pick[0]||null;const session=target?await load(target.id):null;return Response.json({session,readyToComplete:session?isReady(session):false,sessions:summaries,currentRevision:value.revision})}return Response.json({sessions:summaries,currentRevision:value.revision})}
+    if(body.action==='load_session'){const session=await load(String(body.sessionId||''));if(!session)return fail('会话不存在',404,'SESSION_NOT_FOUND');const ctx=await context(request,session.requestId,owner);return Response.json({session,stale:Boolean(ctx&&(ctx.request.revision??1)!==session.requestRevision),readyToComplete:isReady(session)})}
+    if(body.action==='start'||body.action==='start_session'){const value=await current();if('response'in value)return value.response;const p=profile(body.profileId),m=mode(body.mode);if(p==='REVIEW_SYNTHESIZER'&&!value.ctx.reviews.length)return fail('还没有朋友回信，暂时不能启动回信分析',409,'NO_REVIEWS');
+      // 单条查询现存会话（含 messages），替代全量 list() 的 N+1
+      let session=!body.forceNew?await findOne(value.id,p,m):null;
+      if(session&&session.requestRevision!==value.revision)session=null; // 旧 revision 的不复活
+      if(!session){session=await create(value.id,value.revision,p,m)}else if(session.status==='PAUSED')await update(session,'IN_PROGRESS');
+      if(!session.messages.length&&m==='SINGLE'){const turn=await agentNextQuestion(value.ctx,[],p);await add(session,{id:crypto.randomUUID(),role:'ASSISTANT',content:turn.content,questionId:turn.payload.question?.id,agentProfileId:p,payload:turn.payload,createdAt:new Date().toISOString()})}return Response.json({session,readyToComplete:isReady(session)})}
+    if(body.action==='reply'){const session=await load(String(body.sessionId||''));if(!session)return fail('会话不存在',404,'SESSION_NOT_FOUND');if(session.mode!=='SINGLE')return fail('圆桌会话不能使用普通回复',409,'MODE_MISMATCH');if(!['IN_PROGRESS','PAUSED'].includes(session.status))return fail('会话已结束',409,'SESSION_CLOSED');const ctx=await context(request,session.requestId,owner);if(!ctx)return fail('心愿不存在',404,'NOT_FOUND');if((ctx.request.revision??1)!==session.requestRevision)return fail('心愿已被修改，请重新开始',409,'REVISION_CONFLICT');if(session.agentProfileId==='REVIEW_SYNTHESIZER'&&!ctx.reviews.length)return fail('还没有朋友回信',409,'NO_REVIEWS');if(!body.skipped&&!String(body.answer||'').trim())return fail('请填写内容或选择暂时跳过',400,'ANSWER_REQUIRED');
+      // 幂等：客户端为每次发送生成稳定 clientMessageId，重试/双发时同一 ID 只入账一次
+      const trimmed=body.skipped?'':String(body.answer||'').trim(),clientMessageId=body.clientMessageId?String(body.clientMessageId):null;
+      if(clientMessageId&&session.messages.some(message=>message.role==='USER'&&message.payload?.clientMessageId===clientMessageId))return Response.json({session,readyToComplete:isReady(session),duplicate:true});
+      if(session.status==='PAUSED')await update(session,'IN_PROGRESS');await add(session,{id:crypto.randomUUID(),role:'USER',content:trimmed,skipped:Boolean(body.skipped),agentProfileId:session.agentProfileId,payload:clientMessageId?{clientMessageId} as AgentMessage['payload']:undefined,createdAt:new Date().toISOString()});const turn=await agentNextQuestion(ctx,session.messages,session.agentProfileId);await add(session,{id:crypto.randomUUID(),role:'ASSISTANT',content:turn.content,questionId:turn.payload.question?.id,agentProfileId:session.agentProfileId,payload:turn.payload,createdAt:new Date().toISOString()});return Response.json({session,readyToComplete:isReady(session)})}
+    if(body.action==='pause_session'||body.action==='dismiss'){const session=await load(String(body.sessionId||''));if(!session)return fail('会话不存在',404,'SESSION_NOT_FOUND');if(body.action==='dismiss'){if(!body.confirmed)return fail('需要二次确认',400,'CONFIRM_REQUIRED');await update(session,'DISMISSED')}else await update(session,'PAUSED');return Response.json({session})}
+    if(body.action==='complete'||body.action==='generate_report'){const session=await load(String(body.sessionId||''));if(!session)return fail('会话不存在',404,'SESSION_NOT_FOUND');if(session.status==='COMPLETED'&&session.report)return Response.json({session});if(!['IN_PROGRESS','PAUSED'].includes(session.status))return fail('会话已结束',409,'SESSION_CLOSED');const ctx=await context(request,session.requestId,owner);if(!ctx)return fail('心愿不存在',404,'NOT_FOUND');if((ctx.request.revision??1)!==session.requestRevision)return fail('心愿已被修改，请重新开始',409,'REVISION_CONFLICT');const report=await agentComplete(ctx,session.messages,session.agentProfileId);await update(session,'COMPLETED',report);return Response.json({session})}
+    if(body.action==='start_roundtable'||body.action==='run_roundtable'){const value=await current();if('response'in value)return value.response;const selected=[...new Set((body.profiles||[]).filter(item=>PROFILES.has(item)))].slice(0,3);if(selected.length<2)return fail('请选择 2–3 位顾问',400,'PROFILES_REQUIRED');if(selected.includes('REVIEW_SYNTHESIZER')&&!value.ctx.reviews.length)return fail('没有朋友回信时不能选择回信分析',409,'NO_REVIEWS');
+      // SSE 流式：每个顾问观点生成后立即推送，前端边生成边展示
+      const session=await create(value.id,value.revision,'QUICK_DECISION','ROUNDTABLE');
+      const encoder=new TextEncoder();
+      const stream=new ReadableStream({async start(controller){
+        const send=(payload:unknown)=>controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+        try{
+          send({type:'session',sessionId:session.id});
+          const result=await runRoundtable(value.ctx,selected,String(body.topic||'帮我从不同角度梳理这次消费决定'),async event=>{
+            if(event.view){
+              const message:AgentMessage={id:crypto.randomUUID(),role:'ASSISTANT',content:event.view.text,agentProfileId:event.view.profile,createdAt:new Date().toISOString()};
+              await add(session,message);
+              send({type:'view',stage:event.stage,profile:event.view.profile,index:event.index,total:event.total,messageId:message.id,content:event.view.text});
+            }else{
+              send({type:'stage',stage:event.stage,profile:event.profile,index:event.index,total:event.total});
+            }
+          });
+          await update(session,'COMPLETED',result.report,result.metadata);
+          send({type:'done',session:{...session,messages:[...session.messages]}});
+        }catch(error){
+          await update(session,'DISMISSED').catch(()=>{});
+          send({type:'error',error:error instanceof Error?error.message:'圆桌讨论失败'});
+        }finally{controller.close();}
+      }});
+      return new Response(stream,{headers:{'content-type':'text/event-stream','cache-control':'no-cache','connection':'keep-alive','x-accel-buffering':'no'}});
     }
-
-    if (body.action === 'start') {
-      const requestId = String(body.requestId ?? '');
-      const expected = Number(body.expectedRevision);
-      const ctx = await loadContext(request, requestId, userId);
-      if (!ctx) return fail('没有找到这个心愿', 404, 'NOT_FOUND');
-      const rev = ctx.request.revision ?? 1;
-      if (!Number.isFinite(expected) || expected !== rev) return fail('心愿已被修改，请基于最新版本开始新对话', 409, 'REVISION_CONFLICT');
-
-      // find existing IN_PROGRESS session for this revision
-      let session: AgentSession | null = null;
-      if (useLocal) {
-        for (const s of localSessions.values()) { if (s.requestId === requestId && s.requestRevision === rev && s.status === 'IN_PROGRESS') { session = s; break; } }
-      } else if (!useCloudBase) {
-        session = await d1FindInProgress(requestId, rev);
-      } else {
-        const db = getCloudBaseDb();
-        const res = await db.collection('agent_sessions').where({ owner_id: userId, request_id: requestId, request_revision: rev, status: 'IN_PROGRESS' }).limit(1).get();
-        const doc = (res.data || [])[0] as Record<string, unknown> | undefined;
-        if (doc) session = await cloudBaseLoadSession(String(doc.id || doc._id || ''), userId);
-      }
-
-      if (!session) {
-        if (useLocal) { session = { id: crypto.randomUUID(), requestId, requestRevision: rev, status: 'IN_PROGRESS', messages: [], questionCount: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; localSessions.set(session.id, session); }
-        else if (!useCloudBase) { session = await d1StartSession(requestId, rev); }
-        else { const id = crypto.randomUUID(); const ts = new Date().toISOString(); const db = getCloudBaseDb(); await db.collection('agent_sessions').doc(id).set({ id, owner_id: userId, request_id: requestId, request_revision: rev, status: 'IN_PROGRESS', question_count: 0, created_at: ts, updated_at: ts }); session = { id, requestId, requestRevision: rev, status: 'IN_PROGRESS', messages: [], questionCount: 0, createdAt: ts, updatedAt: ts }; }
-      }
-
-      if (session.messages.length === 0) {
-        let firstQuestion: string;
-        try {
-          const turn = await agentNextQuestion(ctx, session.messages);
-          firstQuestion = turn.content;
-        } catch {
-          firstQuestion = fallbackQuestion(ctx, session.messages);
-        }
-        const msg: AgentMessage = { id: crypto.randomUUID(), role: 'ASSISTANT', content: firstQuestion, questionId: 'q1', createdAt: new Date().toISOString() };
-        if (useLocal) { session.messages.push(msg); session.questionCount += 1; session.updatedAt = msg.createdAt; }
-        else if (!useCloudBase) { await d1AddMessage(session, msg); }
-        else { await cloudBaseAddMessage(session, msg, userId); }
-      }
-      return Response.json({ session });
-    }
-
-    if (body.action === 'reply') {
-      const sessionId = String(body.sessionId ?? '');
-      let session: AgentSession | null;
-      if (useLocal) session = localSessions.get(sessionId) ?? null;
-      else if (!useCloudBase) session = await d1LoadSession(sessionId);
-      else session = await cloudBaseLoadSession(sessionId, userId);
-      if (!session) return fail('会话不存在', 404, 'SESSION_NOT_FOUND');
-      if (session.status !== 'IN_PROGRESS') return fail('会话已结束', 409, 'SESSION_CLOSED');
-
-      const ctx = await loadContext(request, session.requestId, userId);
-      if (!ctx) return fail('心愿不存在', 404, 'NOT_FOUND');
-      if ((ctx.request.revision ?? 1) !== session.requestRevision) return fail('心愿已被修改，请基于最新版本开始新对话', 409, 'REVISION_CONFLICT');
-      if (!body.skipped && !String(body.answer ?? '').trim()) return fail('请填写回答或选择暂时跳过', 400, 'ANSWER_REQUIRED');
-      const userMsg: AgentMessage = { id: crypto.randomUUID(), role: 'USER', content: body.skipped ? '' : String(body.answer ?? ''), skipped: Boolean(body.skipped), createdAt: new Date().toISOString() };
-      if (useLocal) { session.messages.push(userMsg); session.updatedAt = userMsg.createdAt; }
-      else if (!useCloudBase) { await d1AddMessage(session, userMsg); }
-      else { await cloudBaseAddMessage(session, userMsg, userId); }
-
-      let readyToComplete = false;
-      if (session.questionCount >= AGENT_MAX_QUESTIONS) {
-        readyToComplete = true;
-      } else {
-        try {
-          const turn = await agentNextQuestion(ctx, session.messages);
-          if (turn.type === 'complete') { readyToComplete = true; }
-          else {
-            const qMsg: AgentMessage = { id: crypto.randomUUID(), role: 'ASSISTANT', content: turn.content, questionId: `q${session.questionCount + 1}`, createdAt: new Date().toISOString() };
-            if (useLocal) { session.messages.push(qMsg); session.questionCount += 1; session.updatedAt = qMsg.createdAt; }
-            else if (!useCloudBase) { await d1AddMessage(session, qMsg); }
-            else { await cloudBaseAddMessage(session, qMsg, userId); }
-          }
-        } catch {
-          const qMsg: AgentMessage = { id: crypto.randomUUID(), role: 'ASSISTANT', content: fallbackQuestion(ctx, session.messages), questionId: `q${session.questionCount + 1}`, createdAt: new Date().toISOString() };
-          if (useLocal) { session.messages.push(qMsg); session.questionCount += 1; session.updatedAt = qMsg.createdAt; }
-          else if (!useCloudBase) { await d1AddMessage(session, qMsg); }
-          else { await cloudBaseAddMessage(session, qMsg, userId); }
-        }
-      }
-      return Response.json({ session, readyToComplete });
-    }
-
-    if (body.action === 'complete') {
-      const sessionId = String(body.sessionId ?? '');
-      let session: AgentSession | null;
-      if (useLocal) session = localSessions.get(sessionId) ?? null;
-      else if (!useCloudBase) session = await d1LoadSession(sessionId);
-      else session = await cloudBaseLoadSession(sessionId, userId);
-      if (!session) return fail('会话不存在', 404, 'SESSION_NOT_FOUND');
-      if (session.status === 'COMPLETED' && session.report) return Response.json({ session });
-      if (session.status !== 'IN_PROGRESS') return fail('会话已结束', 409, 'SESSION_CLOSED');
-      const ctx = await loadContext(request, session.requestId, userId);
-      if (!ctx) return fail('心愿不存在', 404, 'NOT_FOUND');
-      if ((ctx.request.revision ?? 1) !== session.requestRevision) return fail('心愿已被修改，请基于最新版本开始新对话', 409, 'REVISION_CONFLICT');
-      const report = await agentComplete(ctx, session.messages);
-      if (useLocal) { session.status = 'COMPLETED'; session.report = report; }
-      else if (!useCloudBase) { await d1SetStatus(session, 'COMPLETED', report); }
-      else { await cloudBaseSetStatus(session, 'COMPLETED', userId, report); }
-      return Response.json({ session });
-    }
-
-    if (body.action === 'dismiss') {
-      const sessionId = String(body.sessionId ?? '');
-      if (!body.confirmed) return fail('需要二次确认', 400, 'CONFIRM_REQUIRED');
-      let session: AgentSession | null;
-      if (useLocal) session = localSessions.get(sessionId) ?? null;
-      else if (!useCloudBase) session = await d1LoadSession(sessionId);
-      else session = await cloudBaseLoadSession(sessionId, userId);
-      if (!session) return fail('会话不存在', 404, 'SESSION_NOT_FOUND');
-      if (session.status === 'DISMISSED') return Response.json({ session });
-      if (session.status !== 'IN_PROGRESS') return fail('会话已结束', 409, 'SESSION_CLOSED');
-      if (useLocal) { session.status = 'DISMISSED'; }
-      else if (!useCloudBase) { await d1SetStatus(session, 'DISMISSED'); }
-      else { await cloudBaseSetStatus(session, 'DISMISSED', userId); }
-      return Response.json({ session });
-    }
-
-    return fail('未知操作', 400, 'UNKNOWN_ACTION');
-  } catch (error) {
-    const status = error instanceof AiServiceError ? error.status : 500;
-    return fail(error instanceof Error ? error.message : 'Agent 失败', status);
-  }
+    if(body.action==='roundtable_followup'){const session=await load(String(body.sessionId||''));if(!session)return fail('会话不存在',404,'SESSION_NOT_FOUND');if(session.mode!=='ROUNDTABLE'||session.status!=='COMPLETED'||!session.report)return fail('圆桌尚未形成可补充的报告',409,'ROUNDTABLE_NOT_READY');const question=String(body.answer||'').trim();if(!question)return fail('请填写补充问题',400,'ANSWER_REQUIRED');const metadata=session.metadata||{},followupsUsed=Number(metadata.followupsUsed||0);if(followupsUsed>=1)return fail('本次圆桌的补充讨论已经使用',409,'FOLLOWUP_LIMIT');const ctx=await context(request,session.requestId,owner);if(!ctx)return fail('心愿不存在',404,'NOT_FOUND');if((ctx.request.revision??1)!==session.requestRevision)return fail('心愿已被修改，请重新开始',409,'REVISION_CONFLICT');const selected=Array.isArray(metadata.profiles)?metadata.profiles.map(profile).slice(0,3):[];if(selected.length<2)return fail('圆桌顾问信息不完整',409,'ROUNDTABLE_INVALID');const result=await runRoundtableFollowup(ctx,selected,String(metadata.topic||'消费决策'),question,session.report);await add(session,{id:crypto.randomUUID(),role:'USER',content:question,agentProfileId:'QUICK_DECISION',createdAt:new Date().toISOString()});for(const view of result.views)await add(session,{id:crypto.randomUUID(),role:'ASSISTANT',content:view.text,agentProfileId:view.profile,createdAt:new Date().toISOString()});await update(session,'COMPLETED',result.report,result.metadata);return Response.json({session})}
+    return fail('未知操作',400,'UNKNOWN_ACTION');
+  }catch(error){return fail(error instanceof Error?error.message:'Agent 失败',error instanceof AiServiceError?error.status:500)}
 }
