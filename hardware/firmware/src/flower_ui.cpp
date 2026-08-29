@@ -103,16 +103,16 @@ void FlowerUi::drawFlower(const DeviceState& state, unsigned long now, uint16_t 
   gfx->fillCircle(centerX - 4, centerY - 5, 4, 0xF6CE);
 }
 
-void FlowerUi::render(const DeviceState& state, unsigned long now, bool online) {
+void FlowerUi::render(const DeviceState& state, unsigned long now, bool bleConnected) {
   const uint16_t accent = stateColor(state.mode);
   gfx->fillScreen(PAPER);
   drawProgress(state.progress, accent);
 
-  gfx->fillCircle(30, 30, 4, online ? SAGE : MUTED);
+  gfx->fillCircle(30, 30, 4, bleConnected ? SAGE : MUTED);
   gfx->setTextSize(1);
   gfx->setTextColor(MUTED);
   gfx->setCursor(40, 27);
-  gfx->print(online ? "SYNC" : "LOCAL");
+  gfx->print(bleConnected ? "BLE" : "ADVERTISE");
 
   centeredText(flowerModeName(state.mode), 31, 2, INK);
   drawFlower(state, now, accent);

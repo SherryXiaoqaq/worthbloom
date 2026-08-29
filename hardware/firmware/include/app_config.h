@@ -12,18 +12,20 @@ constexpr int WB_LCD_MOSI = 11;
 constexpr int WB_LCD_MISO = 12;
 constexpr int WB_LCD_RESET = 14;
 
-// The onboard BOOT key is also a normal active-low button after startup.
-constexpr int WB_ACTION_BUTTON = 0;
+// BLE and servo configuration for the HaoHaoHua flower.
+constexpr char WB_BLE_DEVICE_NAME[] = "HaoHaoHua";
+constexpr char WB_BLE_SERVICE_UUID[] = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+constexpr char WB_BLE_COMMAND_CHARACTERISTIC_UUID[] = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
 
-#define WB_ENABLE_SERVO 0
-constexpr int WB_SERVO_PIN = 16;
+#define WB_ENABLE_SERVO 1
+constexpr int WB_SERVO_PIN = 13;
 constexpr int WB_SERVO_CHANNEL = 7;
-// Calibrate these two values to the safe mechanical travel of the flower.
-// A server progress of 0.0 uses CLOSED; 1.0 uses OPEN.
-constexpr int WB_SERVO_CLOSED_ANGLE = 30;
-constexpr int WB_SERVO_OPEN_ANGLE = 145;
+constexpr int WB_SERVO_PWM_FREQUENCY = 50;
+constexpr int WB_SERVO_PWM_RESOLUTION = 14;
+constexpr int WB_SERVO_OPEN_ANGLE = 0;
+constexpr int WB_SERVO_CLOSED_ANGLE = 180;
+constexpr int WB_SERVO_DUTY_AT_OPEN = 410;
+constexpr int WB_SERVO_DUTY_AT_CLOSED = 2048;
+constexpr unsigned long WB_SERVO_ROTATE_TIME_MS = 3000;
 
 constexpr unsigned long WB_RENDER_INTERVAL_MS = 45;
-constexpr unsigned long WB_MOCK_STATE_INTERVAL_MS = 7000;
-constexpr unsigned long WB_API_POLL_INTERVAL_MS = 5000;
-constexpr unsigned long WB_WIFI_RETRY_INTERVAL_MS = 10000;
