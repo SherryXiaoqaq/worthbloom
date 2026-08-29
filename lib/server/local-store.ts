@@ -157,13 +157,15 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
   }
   if (body.action === 'update_request') {
     const requestId=String(body.requestId??'');
-    const request=data.requests.find(item=>item.id===requestId);
-    if(!request)throw new LocalStoreError('没有找到这个心愿',404);
-    if(request.status!=='REVIEWING')throw new LocalStoreError('这个决定已经保存，可以复制为新心愿后继续调整。',409,'REQUEST_READ_ONLY');
+    const original=data.requests.find(item=>item.id===requestId);
+    if(!original)throw new LocalStoreError('没有找到这个心愿',404);
+    if(original.status!=='REVIEWING')throw new LocalStoreError('这个决定已经保存，可以复制为新心愿后继续调整。',409,'REQUEST_READ_ONLY');
     const expected=Number(body.expectedRevision);
-    const currentRev=Number(request.revision??1);
+    const currentRev=Number(original.revision??1);
     if(!Number.isFinite(expected)||expected!==currentRev)throw new LocalStoreError('心愿已在其他页面更新，请刷新后重试。',409,'REVISION_CONFLICT');
     const payload=body.payload as Record<string,unknown>;
+    // 先在副本上应用并校验，全部通过后才写回，避免校验失败留下半提交状态
+    const request={...original};
     if(typeof payload.name==='string')request.name=payload.name.trim().slice(0,80);
     if(typeof payload.price==='number')request.price=payload.price;
     if(typeof payload.reason==='string')request.reason=payload.reason.trim().slice(0,500);
@@ -189,6 +191,7 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     if(!String(request.concern??'').trim())throw new LocalStoreError('请填写或选择你最担心的问题',400,'concern');
     if(!request.type||!isKnownWishType(request.type))throw new LocalStoreError('请选择类型',400,'type');
     request.revision=currentRev+1; request.updatedAt=now(); request.similar_item=request.concern;
+    Object.assign(original,request);
     return { request:normalizeWish(request as unknown as Record<string,unknown>) };
   }
   if (body.action === 'create_invite') {

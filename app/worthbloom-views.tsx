@@ -5,12 +5,12 @@ import { clearStoredSession } from '@/lib/cloudbase/client';
 import type { AppData, Asset, AssetReflection, AssetReflectionFeeling, Decision, DeviceState, GrowthAccount, GrowthLedgerEntry, InboxItem, PurchaseRequest, Review, ReviewChoice, ReviewInvite, SavingGoal, UserProfile } from '@/lib/types';
 import { assetFinished, costPerUse, isAssetExpired, remainingUnits } from '@/lib/asset-rules';
 import { typeToCategory } from '@/lib/wish-compat';
-import { AgentPanel } from './agent-panel';
+import { AgentCouncil, AgentPanel } from './agent-panel';
 import styles from './worthbloom-v2.module.css';
 
 export type View = 'garden'|'profile'|'room'|'wishes'|'decisions'|'inbox'|'device'|'agent'|'savings'|'assets';
 
-type IconName='garden'|'plus'|'user'|'bell'|'chevron'|'back'|'flower'|'fruit'|'wish'|'check'|'reply'|'shield'|'help'|'device'|'sort'|'external'|'sparkle'|'share'|'settings'|'wallet'|'edit'|'camera'|'close';
+type IconName='garden'|'plus'|'user'|'bell'|'chevron'|'back'|'flower'|'fruit'|'wish'|'check'|'reply'|'shield'|'help'|'device'|'sort'|'external'|'sparkle'|'share'|'settings'|'wallet'|'edit'|'camera'|'close'|'history';
 
 export function Icon({name,size=22}:{name:IconName;size?:number}){
   const paths:Record<IconName,React.ReactNode>={
@@ -37,6 +37,7 @@ export function Icon({name,size=22}:{name:IconName;size?:number}){
     edit:<><path d="m4 20 4.2-1 10-10a2.1 2.1 0 0 0-3-3l-10 10Z"/><path d="m13.8 7.2 3 3"/></>,
     camera:<><path d="M5 7h3l1.5-2h5L16 7h3a2 2 0 0 1 2 2v9H3V9a2 2 0 0 1 2-2Z"/><circle cx="12" cy="12.5" r="3.2"/></>,
     close:<><path d="m6 6 12 12M18 6 6 18"/></>,
+    history:<><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6M12 8v4l3 2"/></>,
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -143,11 +144,12 @@ export function GardenView({data,unreadReviews,unreadCount,onNavigate,onOpen,onI
 export function AgentHubView({data,onBack}:{data:AppData;onBack:()=>void}){
   const wishes=data.requests.filter(request=>request.status==='REVIEWING');
   const [selectedId,setSelectedId]=useState(wishes[0]?.id||'');
+  const [historyTrigger,setHistoryTrigger]=useState(0);
   const selected=wishes.find(request=>request.id===selectedId)||wishes[0];
-  return <section className={styles.subPage}><PageHeader title="AI 对话" onBack={onBack}/>
-    <aside className={styles.deviceIntro}><span className={styles.deviceIntroIcon}><Icon name="sparkle" size={22}/></span><div><h2>先问问自己</h2><p>AI 会陪你把想要、担心和现实条件理一遍，最后的决定仍然由你完成。</p><small>它提供整理和提问，不会替你下结论。</small></div></aside>
-    {wishes.length>1&&<section className={styles.agentWishPicker}><h2>选择要聊的心愿</h2><div>{wishes.map(request=><button key={request.id} className={selected?.id===request.id?styles.agentWishActive:''} onClick={()=>setSelectedId(request.id)}><span>{request.name}</span><small>¥{request.price.toLocaleString()}</small></button>)}</div></section>}
-    {selected?<AgentPanel requestId={selected.id} revision={selected.revision??1}/>:<div className={styles.emptyAction}><Icon name="sparkle"/><span><b>还没有正在征集意见的心愿</b><small>先种下一个心愿，再来和 AI 聊聊。</small></span></div>}
+  const cover=selected&&imageFor(selected);
+  return <section className={`${styles.subPage} ${styles.agentHubPage}`}><PageHeader title="AI 对话" onBack={onBack} action={<button className={styles.headerIconAction} aria-label="历史对话" onClick={()=>setHistoryTrigger(value=>value+1)}><Icon name="history"/></button>}/>
+    {selected&&<section className={styles.agentContextCard}>{cover?<img src={cover} alt=""/>:<span>{categoryGlyph(selected.category??'')}</span>}<label><small>正在讨论</small><select value={selected.id} onChange={event=>setSelectedId(event.target.value)}>{wishes.map(request=><option key={request.id} value={request.id}>{request.name}</option>)}</select><b>¥{selected.price.toLocaleString()}</b></label></section>}
+    {selected?<AgentCouncil request={selected} hasReviews={data.reviews.some(review=>review.request_id===selected.id)} historyTrigger={historyTrigger}/>:<div className={styles.emptyAction}><Icon name="sparkle"/><span><b>还没有正在征集意见的心愿</b><small>先种下一个心愿，再来和 AI 聊聊。</small></span></div>}
   </section>;
 }
 
@@ -387,7 +389,7 @@ export function WishRoom({data,request,busy,message,onBack,onInvite,onCopyInvite
       {request.product_url&&!request.productUrl&&<a href={request.product_url} target="_blank" rel="noreferrer">查看原商品 <Icon name="external" size={16}/></a>}{!request.product_url&&!request.productUrl&&<p className={styles.missingLink}>未保存商品链接</p>}
     </article>
     {active?<><InvitePanel request={request} invites={data.invites??[]} busy={busy} onInvite={onInvite} onCopyInvite={onCopyInvite}/><FeedbackPanel reviews={reviews} currentRevision={request.revision??1} onInvite={onInvite}/>
-      <AgentPanel requestId={request.id} revision={request.revision??1} />
+      <AgentPanel request={request} revision={request.revision??1} />
       <section className={styles.finalDecision}><small>最后一步</small><h2>听完不同视角，<br/>由你完成决定。</h2><textarea value={note} onChange={event=>{setNote(event.target.value);onDecisionNote(event.target.value)}} placeholder="写下为什么这样决定，留给之后的自己"/><div><button disabled={Boolean(busy)} onClick={()=>onDecide('BUY_NOW')}>现在购买</button><button disabled={Boolean(busy)} onClick={()=>onDecide('SAVE_FIRST')}>先存钱</button><button disabled={Boolean(busy)} onClick={()=>onDecide('WAIT')}>再等等</button></div></section>
     </>:<><section className={styles.timeline}><h2>决定时间线</h2><article className={styles.blueSurface}><small>01 · 心愿事实</small><b>{request.reason}</b></article><article className={styles.pinkSurface}><small>02 · 朋友视角</small><b>{reviews.length?`${reviews.length} 条回信已保存`:'当时没有真人回信'}</b>{reviews.map(review=><p key={review.id}>{review.reviewer_name}：{review.comment}</p>)}</article><article className={decision?.decision==='SAVE_FIRST'?styles.greenSurface:styles.yellowSurface}><small>03 · 最终决定</small><b>{decision?decisionCopy(decision.decision):statusCopy(request)}</b><p>{request.decision_note||'当时没有补充决定理由。'}</p><time>{decision?new Date(decision.decided_at).toLocaleString('zh-CN'):'时间未记录'}</time></article></section>{goal&&<SavingControl goal={goal} onAdd={amount=>onAddSaving(goal.id,amount)}/>}</>}{message&&<p className={styles.toast} role="status">{message}</p>}</section>;
 }

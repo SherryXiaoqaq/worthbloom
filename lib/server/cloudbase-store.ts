@@ -349,7 +349,6 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
       const images = (payload.images as Array<Record<string, unknown>>).slice(0, 6).map((img, index) => ({ id: String(img.id ?? crypto.randomUUID()), url: String(img.url ?? ''), sortOrder: Number(img.sortOrder ?? index), isCover: Boolean(img.isCover) }));
       if (images.length && !images.some(img => img.isCover)) images[0].isCover = true;
       patch.images = images;
-      await saveDocument(collections.wishImages, `${requestId}-images`, { owner_id: ownerId, request_id: requestId, images, updated_at: now() });
     }
     const nextName=String(patch.name??request.name??'').trim();
     const nextReason=String(patch.reason??request.reason??'').trim();
@@ -361,6 +360,8 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     if(!Number.isFinite(nextPrice)||nextPrice<0||nextPrice>99_999_999.99)throw new CloudBaseStoreError('请填写有效价格',400,'price');
     if(!nextConcern)throw new CloudBaseStoreError('请填写或选择你最担心的问题',400,'concern');
     if(!isKnownWishType(nextType))throw new CloudBaseStoreError('请选择类型',400,'type');
+    // 校验全部通过后再写图片，避免校验失败留下半提交状态
+    if (Array.isArray(patch.images)) await saveDocument(collections.wishImages, `${requestId}-images`, { owner_id: ownerId, request_id: requestId, images: patch.images, updated_at: now() });
     patch.revision = currentRev + 1;
     patch.updatedAt = now();
     patch.similar_item = patch.concern ?? request.similar_item;
