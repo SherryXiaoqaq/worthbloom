@@ -1,6 +1,6 @@
 import type { ReviewChoice } from '@/lib/types';
 
-export type WishCategory = '课程' | '会员' | '储值' | '实物' | '旅行体验';
+export type WishCategory = '高价值实物' | '一次性体验/消耗品' | '会员/订阅' | '储值/余额' | '课程/次卡' | '其他';
 
 export interface ProductAnalysis {
   name: string | null;

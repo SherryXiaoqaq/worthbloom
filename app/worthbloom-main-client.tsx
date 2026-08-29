@@ -1,19 +1,20 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AppData, GrowthAccount, GrowthLedgerEntry, InboxItem, InboxPage, PurchaseRequest, ReviewChoice, ReviewInvite, UserProfile } from '@/lib/types';
+import type { AppData, Asset, AssetReflection, AssetReflectionFeeling, GrowthAccount, GrowthLedgerEntry, InboxItem, InboxPage, PurchaseRequest, ReviewChoice, ReviewInvite, SavingGoal, UserProfile } from '@/lib/types';
 import { AUTH_USER_KEY, cloudBaseFetch } from '@/lib/cloudbase/client';
+import { normalizeDecision, normalizeSavingGoal } from '@/lib/wish-compat';
 import CreateWishSheet from './worthbloom-create';
-import { BottomNav, DecisionsView, DeviceView, GardenView, InboxView, ProfileView, SavingsView, View, WishesView, WishRoom } from './worthbloom-views';
+import { AgentHubView, AssetsView, BottomNav, DecisionsView, DeviceView, GardenView, InboxView, ProfileView, SavingsView, View, WishesView, WishRoom } from './worthbloom-views';
 import styles from './worthbloom-v2.module.css';
 
 const demoData:AppData={
   requests:[
-    {id:'demo-course',name:'十二节现代舞训练课',price:2680,reason:'我一直想把跳舞变成每周真实发生的事情，但担心买完后又因为加班缺席。',category:'训练课程',total_units:12,usage_frequency:'每周 2 次',expiry_date:'2026-12-31',product_url:null,similar_item:'坚持不下来',status:'REVIEWING',review_token:'dance-demo',created_at:'2026-08-24T09:00:00Z',review_count:3},
-    {id:'demo-headphones',name:'轻量降噪耳机',price:1299,reason:'通勤和自习都会使用，希望减少环境噪音，但担心戴久了不舒服。',category:'较高价商品',total_units:null,usage_frequency:'每天通勤',expiry_date:null,product_url:'https://example.com/headphones',similar_item:'不适合自己',status:'REVIEWING',review_token:'headphones-demo',created_at:'2026-08-25T08:00:00Z',review_count:0},
-    {id:'demo-dryer',name:'高速吹风机',price:1699,reason:'每天都会用，想减少吹头发的时间，也希望更轻一点。',category:'较高价商品',total_units:null,usage_frequency:'每天',expiry_date:null,product_url:'https://example.com/dryer',similar_item:'预算压力',status:'SAVING',review_token:'dryer-demo',created_at:'2026-08-22T09:00:00Z',review_count:1,decision_note:'先存到一半，再确认旧吹风机是否还能继续使用。'},
-    {id:'demo-camera',name:'便携微单相机',price:6299,reason:'想认真记录旅行和朋友，不希望每次都只依赖手机。',category:'较高价商品',total_units:null,usage_frequency:'每月 2–3 次',expiry_date:null,product_url:'https://example.com/camera',similar_item:'买完闲置',status:'PURCHASED',review_token:'camera-demo',created_at:'2026-08-18T09:00:00Z',review_count:1,decision_note:'未来半年已有三次旅行，决定购买并先用好套机镜头。'},
-    {id:'demo-theatre',name:'周末表演训练营',price:3980,reason:'想挑战舞台表达，也希望认识新的朋友。',category:'训练课程',total_units:8,usage_frequency:'每周末',expiry_date:'2026-11-30',product_url:null,similar_item:'时间安排',status:'ARCHIVED',review_token:'theatre-demo',created_at:'2026-08-12T09:00:00Z',review_count:1,decision_note:'这两个月周末行程太满，先等等不是放弃。'},
+    {id:'demo-course',name:'十二节现代舞训练课',price:2680,reason:'我一直想把跳舞变成每周真实发生的事情，但担心买完后又因为加班缺席。',type:'COURSE_TRAINING',category:'课程/次卡',total_units:12,usage_frequency:'每周 2 次',expiry_date:'2026-12-31',product_url:null,similar_item:'坚持不下来',status:'REVIEWING',review_token:'dance-demo',created_at:'2026-08-24T09:00:00Z',review_count:3},
+    {id:'demo-headphones',name:'轻量降噪耳机',price:1299,reason:'通勤和自习都会使用，希望减少环境噪音，但担心戴久了不舒服。',type:'DURABLE_GOOD',category:'高价值实物',total_units:null,usage_frequency:'每天通勤',expiry_date:null,product_url:'https://example.com/headphones',similar_item:'不适合自己',status:'REVIEWING',review_token:'headphones-demo',created_at:'2026-08-25T08:00:00Z',review_count:0},
+    {id:'demo-dryer',name:'高速吹风机',price:1699,reason:'每天都会用，想减少吹头发的时间，也希望更轻一点。',type:'DURABLE_GOOD',category:'高价值实物',total_units:null,usage_frequency:'每天',expiry_date:null,product_url:'https://example.com/dryer',similar_item:'预算压力',status:'SAVING',review_token:'dryer-demo',created_at:'2026-08-22T09:00:00Z',review_count:1,decision_note:'先存到一半，再确认旧吹风机是否还能继续使用。'},
+    {id:'demo-camera',name:'便携微单相机',price:6299,reason:'想认真记录旅行和朋友，不希望每次都只依赖手机。',type:'DURABLE_GOOD',category:'高价值实物',total_units:null,usage_frequency:'每月 2–3 次',expiry_date:null,product_url:'https://example.com/camera',similar_item:'买完闲置',status:'PURCHASED',review_token:'camera-demo',created_at:'2026-08-18T09:00:00Z',review_count:1,decision_note:'未来半年已有三次旅行，决定购买并先用好套机镜头。'},
+    {id:'demo-theatre',name:'周末表演训练营',price:3980,reason:'想挑战舞台表达，也希望认识新的朋友。',type:'COURSE_TRAINING',category:'课程/次卡',total_units:8,usage_frequency:'每周末',expiry_date:'2026-11-30',product_url:null,similar_item:'时间安排',status:'ARCHIVED',review_token:'theatre-demo',created_at:'2026-08-12T09:00:00Z',review_count:1,decision_note:'这两个月周末行程太满，先等等不是放弃。'},
   ],
   reviews:[
     {id:'demo-r1',request_id:'demo-course',reviewer_name:'曲奇 · 了解你',choice:'SAVE_FIRST',comment:'【有条件】时间能排开｜你是真的喜欢。先锁定每周二、周六，再报名会更稳。',created_at:'2026-08-24T10:00:00Z'},
@@ -25,18 +26,39 @@ const demoData:AppData={
   ],
   invites:[{id:'demo-i1',request_id:'demo-course',token:'dance-friend-demo',label:'朋友 1',used_by:null,used_at:null,revoked:0,created_at:'2026-08-24T09:00:00Z'},{id:'demo-i2',request_id:'demo-headphones',token:'headphones-friend-demo',label:'朋友 1',used_by:null,used_at:null,revoked:0,created_at:'2026-08-25T08:00:00Z'}],
   decisions:[{request_id:'demo-dryer',decision:'SAVE_FIRST',decided_at:'2026-08-23T09:30:00Z'},{request_id:'demo-camera',decision:'BUY_NOW',decided_at:'2026-08-21T18:20:00Z'},{request_id:'demo-theatre',decision:'WAIT',decided_at:'2026-08-16T20:10:00Z'}],
-  savingGoals:[{id:'demo-saving',request_id:'demo-dryer',name:'高速吹风机',target:1699,current:900,weekly_plan:200,created_at:'2026-08-22T09:00:00Z'}],assets:[],
+  savingGoals:[{id:'demo-saving',request_id:'demo-dryer',name:'高速吹风机',target:1699,current:900,weekly_plan:200,created_at:'2026-08-22T09:00:00Z'}],assets:[],assetReflections:[],
 };
 
 type HistoryState={worthbloom:true;view:View;requestId?:string;scrollY:number};
-const viewNames=new Set<View>(['garden','profile','room','wishes','decisions','inbox','device','savings']);
+const viewNames=new Set<View>(['garden','profile','room','wishes','decisions','inbox','device','agent','savings','assets']);
 function routeFromHash(hash:string):Pick<HistoryState,'view'|'requestId'>{
   const [rawView,rawRequestId]=hash.replace(/^#/,'').split('/');
   const view=viewNames.has(rawView as View)?rawView as View:'garden';
   return{view,requestId:rawRequestId?decodeURIComponent(rawRequestId):undefined};
 }
 async function json<T>(response:Response):Promise<T>{const data=await response.json() as T&{error?:string};if(!response.ok)throw new Error(data.error||'操作失败');return data}
-function normalizeData(data:AppData):AppData{return{...data,requests:data.requests||[],reviews:data.reviews||[],invites:data.invites||[],decisions:data.decisions||[],savingGoals:data.savingGoals||[],assets:data.assets||[]}}
+async function copyText(value:string){
+  if(typeof navigator!=='undefined'&&navigator.clipboard?.writeText){try{await navigator.clipboard.writeText(value);return}catch{/* 某些手机浏览器不允许直接写剪贴板，继续使用备用方式 */}}
+  if(typeof document==='undefined')throw new Error('当前环境无法复制链接');
+  const input=document.createElement('textarea');input.value=value;input.setAttribute('readonly','');input.style.position='fixed';input.style.opacity='0';document.body.appendChild(input);input.select();
+  const copied=document.execCommand('copy');input.remove();if(!copied)throw new Error('复制没有成功，请长按链接手动复制');
+}
+function normalizeData(data:AppData):AppData{
+  const requests=data.requests||[];
+  const decisions=(data.decisions||[]).map(item=>normalizeDecision(item as unknown as Record<string,unknown>)).filter((item):item is NonNullable<ReturnType<typeof normalizeDecision>>=>item!==null);
+  const savingGoals=(data.savingGoals||[]).map(item=>normalizeSavingGoal(item as unknown as Record<string,unknown>));
+  // Older local snapshots recorded the request status but not a row in
+  // final_decisions. Reconstruct that missing display-only history on read;
+  // the local store also persists the repair for subsequent API calls.
+  const known=new Set(decisions.map(item=>item.request_id));
+  for(const request of requests){
+    if(known.has(request.id)||request.status==='REVIEWING')continue;
+    const goal=savingGoals.find(item=>item.request_id===request.id);
+    decisions.push({request_id:request.id,decision:(goal||request.status==='SAVING')?'SAVE_FIRST':request.status==='ARCHIVED'?'WAIT':'BUY_NOW',decided_at:goal?.created_at||request.updatedAt||request.createdAt||request.created_at||new Date().toISOString()});
+  }
+  decisions.sort((a,b)=>Date.parse(b.decided_at)-Date.parse(a.decided_at));
+  return{...data,requests,reviews:data.reviews||[],invites:data.invites||[],decisions,savingGoals,assets:data.assets||[],assetReflections:data.assetReflections||[]}
+}
 const defaultProfile:UserProfile={userId:'local-profile',nickname:'好好花用户',bio:'把每一次认真思考，留给未来的自己。',shareIdentityDefault:'ANONYMOUS',createdAt:'2026-08-26T00:00:00.000Z',updatedAt:'2026-08-26T00:00:00.000Z'};
 const defaultGrowth:GrowthAccount={userId:'local-profile',points:0,level:1,nextLevelPoints:100};
 function readProfile(){
@@ -95,9 +117,15 @@ export default function WorthBloomMainClient(){
   async function openInbox(){navigate('inbox');try{const page=await loadInbox(true);const unreadIds=page?.items.filter(item=>!item.isRead).map(item=>item.review.id)??[];if(unreadIds.length){await json(await cloudBaseFetch('/api/inbox',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({reviewIds:unreadIds})}));setInboxItems(previous=>previous.map(item=>unreadIds.includes(item.review.id)?{...item,isRead:true}:item));setInboxUnreadCount(previous=>Math.max(0,previous-unreadIds.length));setSeenReviewIds(previous=>[...new Set([...previous,...unreadIds])])}}catch{/* 数据仍可从 /api/data 展示 */}}
   function back(){const state=history.state as HistoryState|null;if(state?.worthbloom&&view!=='garden'&&view!=='profile')history.back();else root('garden')}
   function openRoom(request:PurchaseRequest){setDecisionNote(request.decision_note||'');navigate('room',request.id)}
-  async function invite(request=active){if(!request)return;setBusy('invite');setMessage('');try{let invite=data.invites.find(item=>item.request_id===request.id&&!item.revoked&&!item.used_at);if(!invite){const output=await json<{invite:ReviewInvite}>(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'create_invite',requestId:request.id})}));invite=output.invite;setData(previous=>({...previous,invites:[...previous.invites,invite!]}))}const url=`${location.origin}/review/wish/${invite.token}`;await navigator.clipboard.writeText(url);setMessage('朋友邀请链接已复制，可以发到微信或其他群聊。');if(view!=='room')openRoom(request)}catch(error){setMessage(error instanceof Error?error.message:'邀请链接生成失败')}finally{setBusy('')}}
-  async function decide(choice:ReviewChoice){if(!active)return;setBusy(choice);setMessage('');try{await json(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'decide',requestId:active.id,decision:choice,note:decisionNote})}));const result=await refresh();const updated=result.requests.find(item=>item.id===active.id);if(updated)setActiveId(updated.id);setMessage(choice==='BUY_NOW'?'决定已经保存：现在购买。':choice==='SAVE_FIRST'?'决定已经保存，并创建了存钱目标。':'决定已经保存：再等等也是一种清楚的选择。')}catch(error){setMessage(error instanceof Error?error.message:'决定没有保存')}finally{setBusy('')}}
+  function inviteUrl(invite:ReviewInvite){return `${location.origin}/review/wish/${invite.token}`}
+  async function copyInvite(invite:ReviewInvite){setBusy(`copy:${invite.id}`);setMessage('');try{await copyText(inviteUrl(invite));setMessage('群聊邀请已复制，同一个链接可以收集多份回信。')}catch(error){setMessage(error instanceof Error?error.message:'链接复制失败')}finally{setBusy('')}}
+  async function invite(request=active){if(!request)return;setBusy('invite');setMessage('');try{let invite=data.invites.find(item=>item.request_id===request.id&&!item.revoked);if(!invite){const output=await json<{invite:ReviewInvite}>(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'create_invite',requestId:request.id})}));invite=output.invite;setData(previous=>({...previous,invites:[...previous.invites,invite!]}))}try{await copyText(inviteUrl(invite));setMessage('群聊邀请已复制，同一个链接可以收集多份回信。')}catch(error){setMessage(error instanceof Error?error.message:'邀请链接生成失败')}if(view!=='room')openRoom(request)}catch(error){setMessage(error instanceof Error?error.message:'邀请链接生成失败')}finally{setBusy('')}}
+  async function decide(choice:ReviewChoice){if(!active)return;setBusy(choice);setMessage('');try{const output=await json<{target:'assets'|'saving'|'wishes';goal?:SavingGoal|null;asset?:Asset|null}>(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'decide',requestId:active.id,decision:choice,note:decisionNote})}));const decidedAt=new Date().toISOString();setData(previous=>({...previous,requests:previous.requests.map(item=>item.id===active.id?{...item,status:choice==='BUY_NOW'?'PURCHASED':choice==='SAVE_FIRST'?'SAVING':'ARCHIVED',decision_note:decisionNote||item.decision_note}:item),decisions:[{request_id:active.id,decision:choice,decided_at:decidedAt},...previous.decisions.filter(item=>item.request_id!==active.id)],savingGoals:output.goal&&!previous.savingGoals.some(item=>item.id===output.goal!.id)?[normalizeSavingGoal(output.goal as unknown as Record<string,unknown>),...previous.savingGoals]:previous.savingGoals,assets:output.asset&&!previous.assets.some(item=>item.id===output.asset!.id)?[output.asset,...previous.assets]:previous.assets}));await refresh();if(output.target==='saving')navigate('savings');else if(output.target==='assets')navigate('assets');else navigate('decisions')}catch(error){setMessage(error instanceof Error?error.message:'决定没有保存')}finally{setBusy('')}}
   async function addSaving(goalId:string,amount:number){await json(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'add_saving',goalId,amount})}));await refresh()}
+  async function addAsset(payload:Record<string,unknown>){const output=await json<{asset:Asset}>(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'add_asset',payload})}));setData(previous=>({...previous,assets:[output.asset,...previous.assets]}));return output.asset}
+  async function useAsset(assetId:string,amount?:number){const output=await json<{asset:Asset}>(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'use_asset',assetId,amount})}));setData(previous=>({...previous,assets:previous.assets.map(item=>item.id===assetId?output.asset:item)}));return output.asset}
+  async function deleteAsset(assetId:string){await json(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'delete_asset',assetId})}));setData(previous=>({...previous,assets:previous.assets.filter(item=>item.id!==assetId)}))}
+  async function addReflection(payload:{assetId:string;feeling:AssetReflectionFeeling;wouldBuyAgain:AssetReflection['would_buy_again'];note:string;trigger:AssetReflection['trigger']}){const output=await json<{reflection:AssetReflection;asset:Asset}>(await cloudBaseFetch('/api/data',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'add_asset_reflection',...payload})}));setData(previous=>({...previous,assets:previous.assets.map(item=>item.id===output.asset.id?output.asset:item),assetReflections:[output.reflection,...previous.assetReflections]}));await refreshGrowth();return output.reflection}
   function created(request:PurchaseRequest,invites:ReviewInvite[]){setData(previous=>{const exists=previous.requests.some(r=>r.id===request.id);return{...previous,requests:exists?previous.requests.map(r=>r.id===request.id?request:r):[request,...previous.requests],invites:[...previous.invites,...invites]}});setEditRequest(null);setDecisionNote('');navigate('room',request.id)}
   async function refreshGrowth(){const output=await json<{account:GrowthAccount;entries:GrowthLedgerEntry[]}>(await cloudBaseFetch('/api/growth',{cache:'no-store'}));setGrowthAccount(output.account);setGrowthEntries(output.entries)}
   async function updateProfile(next:UserProfile){const output=await json<{profile:UserProfile}>(await cloudBaseFetch('/api/profile',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({nickname:next.nickname,bio:next.bio,shareIdentityDefault:next.shareIdentityDefault})}));setProfile(output.profile);writeProfile(output.profile);await refreshGrowth()}
@@ -112,9 +140,11 @@ export default function WorthBloomMainClient(){
     {view==='decisions'&&<DecisionsView data={data} onBack={back} onOpen={openRoom}/>}
     {view==='inbox'&&<InboxView data={data} items={inboxItems} nextCursor={inboxNextCursor} onLoadMore={()=>loadInbox(false)} onBack={back} onOpen={openRoom}/>}
     {view==='device'&&<DeviceView data={data} onBack={back}/>}
+    {view==='agent'&&<AgentHubView data={data} onBack={back}/>}
     {view==='savings'&&<SavingsView data={data} onBack={back} onAddSaving={addSaving}/>}
-    {view==='room'&&active&&<WishRoom key={active.id} data={data} request={active} busy={busy} message={message} onBack={back} onInvite={()=>void invite()} onDecide={choice=>void decide(choice)} onAddSaving={addSaving} onDecisionNote={setDecisionNote} onEdit={()=>{setEditRequest(active);setCreateOpen(true)}}/>}
-    {rootPage&&<BottomNav view={view} onRoot={root} onCreate={()=>setCreateOpen(true)}/>}
-    <CreateWishSheet open={createOpen} editRequest={editRequest} onClose={()=>{setCreateOpen(false);setEditRequest(null)}} onCreated={created}/>
+    {view==='assets'&&<AssetsView data={data} onBack={back} onAddAsset={addAsset} onUseAsset={useAsset} onDeleteAsset={deleteAsset} onAddReflection={addReflection}/>}
+    {view==='room'&&active&&<WishRoom key={active.id} data={data} request={active} busy={busy} message={message} onBack={back} onInvite={()=>void invite()} onCopyInvite={copyInvite} onDecide={choice=>void decide(choice)} onAddSaving={addSaving} onDecisionNote={setDecisionNote} onEdit={()=>{setEditRequest(active);setCreateOpen(true)}}/>}
+    {rootPage&&<BottomNav view={view} onRoot={root} onCreate={()=>setCreateOpen(true)} onAgent={()=>navigate('agent')} onAssets={()=>navigate('assets')}/>}
+    <CreateWishSheet open={createOpen} editRequest={editRequest} pastReflections={data.assetReflections} onClose={()=>{setCreateOpen(false);setEditRequest(null)}} onCreated={created}/>
   </div></main>;
 }

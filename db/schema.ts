@@ -38,12 +38,18 @@ const schemaStatements = [
     id TEXT PRIMARY KEY, request_id TEXT, name TEXT NOT NULL, type TEXT NOT NULL,
     purchase_price REAL NOT NULL, total_units INTEGER, used_units INTEGER NOT NULL DEFAULT 0,
     current_balance REAL, expiry_date TEXT, usage_count INTEGER NOT NULL DEFAULT 0,
-    last_used_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    last_used_at TEXT, archived_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS usage_records (
     id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, usage_type TEXT NOT NULL,
     amount REAL, note TEXT, client_event_id TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+  )`,
+  `CREATE TABLE IF NOT EXISTS asset_reflections (
+    id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, asset_name TEXT NOT NULL, asset_type TEXT NOT NULL,
+    feeling TEXT, rating INTEGER, would_buy_again TEXT NOT NULL, note TEXT NOT NULL,
+    trigger TEXT NOT NULL DEFAULT 'MANUAL', usage_count INTEGER NOT NULL DEFAULT 0,
+    cost_per_use REAL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS device_states (
     id TEXT PRIMARY KEY, mode TEXT NOT NULL, health INTEGER NOT NULL, progress REAL NOT NULL DEFAULT 0,
@@ -89,6 +95,7 @@ const schemaStatements = [
   `CREATE INDEX IF NOT EXISTS idx_reviews_request_id ON reviews(request_id)`,
   `CREATE INDEX IF NOT EXISTS idx_review_invites_request_id ON review_invites(request_id)`,
   `CREATE INDEX IF NOT EXISTS idx_usage_asset_id ON usage_records(asset_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_asset_reflections_asset_id ON asset_reflections(asset_id)`,
   `CREATE INDEX IF NOT EXISTS idx_wish_images_request_id ON wish_images(request_id)`,
   `CREATE INDEX IF NOT EXISTS idx_agent_sessions_request_id ON agent_sessions(request_id)`,
   `CREATE INDEX IF NOT EXISTS idx_agent_messages_session_id ON agent_messages(session_id)`,
@@ -97,7 +104,7 @@ const schemaStatements = [
 ];
 
 const seedStatements = [
-  `INSERT OR IGNORE INTO purchase_requests (id,name,price,reason,category,total_units,usage_frequency,status,review_token,created_at,type,concern,revision,updated_at) VALUES ('request-iceland','去冰岛看极光',18600,'二十七岁以前，想认真地去一次很远的地方。不是逃离，是奖励自己终于学会独自出发。','旅行体验',7,'一次完整旅行','REVIEWING','iceland-demo-2026','2026-08-21T10:00:00Z','EXPERIENCE','',1,'2026-08-21T10:00:00Z')`,
+  `INSERT OR IGNORE INTO purchase_requests (id,name,price,reason,category,total_units,usage_frequency,status,review_token,created_at,type,concern,revision,updated_at) VALUES ('request-iceland','去冰岛看极光',18600,'二十七岁以前，想认真地去一次很远的地方。不是逃离，是奖励自己终于学会独自出发。','一次性体验/消耗品',1,'一次完整旅行','REVIEWING','iceland-demo-2026','2026-08-21T10:00:00Z','SINGLE_USE','',1,'2026-08-21T10:00:00Z')`,
   `INSERT OR IGNORE INTO reviews (id,request_id,reviewer_name,choice,comment,created_at,request_revision,legacy_context) VALUES ('r1','request-iceland','桃子','SAVE_FIRST','这件事你念叨很久了，值得去。慢一点准备，会更安心。','2026-08-22T10:00:00Z',1,1)`,
   `INSERT OR IGNORE INTO reviews (id,request_id,reviewer_name,choice,comment,created_at,request_revision,legacy_context) VALUES ('r2','request-iceland','晴晴','BUY_NOW','支持出发，但别忘了把冬季装备和保险算进预算。','2026-08-22T11:00:00Z',1,1)`,
   `INSERT OR IGNORE INTO reviews (id,request_id,reviewer_name,choice,comment,created_at,request_revision,legacy_context) VALUES ('r3','request-iceland','安安','SAVE_FIRST','先存到八成就开始订票，期待也会变成旅程的一部分。','2026-08-22T12:00:00Z',1,1)`,
@@ -138,6 +145,51 @@ const reviewMigrations: Array<[string, string]> = [
   ['claimed_at', 'ALTER TABLE reviews ADD COLUMN claimed_at TEXT'],
 ];
 
+const assetMigrations: Array<[string, string]> = [
+  ['archived_at', 'ALTER TABLE assets ADD COLUMN archived_at TEXT'],
+];
+
+const legacyFeelingSql = `CASE
+  WHEN rating >= 5 THEN 'BECAME_PART_OF_LIFE'
+  WHEN rating >= 3 THEN 'SOMETIMES_USEFUL'
+  WHEN rating >= 2 THEN 'BARELY_USED'
+  ELSE 'NOT_FOR_ME'
+END`;
+
+async function ensureAssetReflectionSchema(db:D1Database) {
+  let columns = await db.prepare(`PRAGMA table_info(asset_reflections)`).all<{ name:string; notnull:number }>();
+  let have = new Set(columns.results.map(column => column.name));
+  if(!have.has('feeling')) {
+    await db.prepare(`ALTER TABLE asset_reflections ADD COLUMN feeling TEXT`).run();
+    columns = await db.prepare(`PRAGMA table_info(asset_reflections)`).all<{ name:string; notnull:number }>();
+    have = new Set(columns.results.map(column => column.name));
+  }
+
+  const ratingColumn = columns.results.find(column => column.name==='rating');
+  if(ratingColumn?.notnull) {
+    await db.batch([
+      db.prepare(`DROP TABLE IF EXISTS asset_reflections_v2`),
+      db.prepare(`CREATE TABLE asset_reflections_v2 (
+        id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, asset_name TEXT NOT NULL, asset_type TEXT NOT NULL,
+        feeling TEXT, rating INTEGER, would_buy_again TEXT NOT NULL, note TEXT NOT NULL,
+        trigger TEXT NOT NULL DEFAULT 'MANUAL', usage_count INTEGER NOT NULL DEFAULT 0,
+        cost_per_use REAL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`),
+      db.prepare(`INSERT INTO asset_reflections_v2 (id,asset_id,asset_name,asset_type,feeling,rating,would_buy_again,note,trigger,usage_count,cost_per_use,created_at)
+        SELECT id,asset_id,asset_name,asset_type,COALESCE(feeling,${legacyFeelingSql}),rating,would_buy_again,note,trigger,usage_count,cost_per_use,created_at
+        FROM asset_reflections`),
+      db.prepare(`DROP TABLE asset_reflections`),
+      db.prepare(`ALTER TABLE asset_reflections_v2 RENAME TO asset_reflections`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_asset_reflections_asset_id ON asset_reflections(asset_id)`),
+    ]);
+    return;
+  }
+
+  if(have.has('feeling')) {
+    await db.prepare(`UPDATE asset_reflections SET feeling = ${legacyFeelingSql} WHERE feeling IS NULL OR feeling = ''`).run();
+  }
+}
+
 export async function ensureSchema(db: D1Database) {
   await db.batch(schemaStatements.map(sql => db.prepare(sql)));
   const requestColumns = await db.prepare(`PRAGMA table_info(purchase_requests)`).all<{ name: string }>();
@@ -150,5 +202,11 @@ export async function ensureSchema(db: D1Database) {
   for (const [col, sql] of reviewMigrations) {
     if (!reviewHave.has(col)) await db.prepare(sql).run();
   }
+  const assetColumns = await db.prepare(`PRAGMA table_info(assets)`).all<{ name:string }>();
+  const assetHave = new Set(assetColumns.results.map(column => column.name));
+  for(const [column,sql] of assetMigrations) {
+    if(!assetHave.has(column))await db.prepare(sql).run();
+  }
+  await ensureAssetReflectionSchema(db);
   await db.batch(seedStatements.map(sql => db.prepare(sql)));
 }

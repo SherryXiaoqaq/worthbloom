@@ -6,7 +6,7 @@
 class FlowerUi {
  public:
   bool begin();
-  void render(const DeviceState& state, unsigned long now, bool online);
+  void render(const DeviceState& state, unsigned long now, bool bleConnected);
 
  private:
   void centeredText(const String& text, int y, uint8_t size, uint16_t color);
