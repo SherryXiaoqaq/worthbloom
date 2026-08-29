@@ -108,10 +108,22 @@ export async function readProductPage(rawUrl: string) {
       const title = metaContent(html, 'og:title') || decodeEntities(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() || '');
       const description = metaContent(html, 'og:description') || metaContent(html, 'description');
       const price = metaContent(html, 'product:price:amount') || metaContent(html, 'og:price:amount');
+      const rawImageUrl = metaContent(html, 'og:image') || metaContent(html, 'twitter:image');
+      let imageUrl: string | null = null;
+      if (rawImageUrl) {
+        try { imageUrl = assertPublicProductUrl(new URL(rawImageUrl, url).toString()).toString(); }
+        catch { imageUrl = null; }
+      }
       const jsonLd = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)]
         .map(match => match[1].trim())
         .join('\n')
         .slice(0, 9_000);
+      const hydrationData = [
+        ...html.matchAll(/<script[^>]+(?:id=["']__NEXT_DATA__["']|type=["']application\/json["'])[^>]*>([\s\S]*?)<\/script>/gi),
+      ].map(match => match[1].trim())
+        .filter(value => /price|product|sku|商品|价格|课程|会员/i.test(value))
+        .join('\n')
+        .slice(0, 6_000);
       const visibleText = decodeEntities(html
         .replace(/<script[\s\S]*?<\/script>/gi, ' ')
         .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -125,9 +137,10 @@ export async function readProductPage(rawUrl: string) {
         description && `网页描述：${description}`,
         price && `页面价格元数据：${price}`,
         jsonLd && `JSON-LD：${jsonLd}`,
+        hydrationData && `页面内嵌商品数据：${hydrationData}`,
         visibleText && `页面正文：${visibleText}`,
       ].filter(Boolean).join('\n').slice(0, MAX_PROMPT_CHARS);
-      return { url: url.toString(), promptText, title };
+      return { url: url.toString(), promptText, title, imageUrl };
     }
     throw new ProductSourceError('商品页面无法读取', 422);
   } catch (error) {

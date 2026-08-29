@@ -4,13 +4,14 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { cloudBaseFetch, isCloudBaseClientConfigured } from '@/lib/cloudbase/client';
 import type { ProductAnalysis, PurchaseAdvice, PurchaseHabitProfile } from '@/lib/ai-types';
 import type { AppData, Asset, PurchaseRequest, ReviewChoice, ReviewInvite, SavingGoal } from '@/lib/types';
+import { categoryToType, WISH_TYPE_OPTIONS } from '@/lib/wish-compat';
 
 type Tab = 'home' | 'wishes' | 'saving' | 'assets';
 type Screen = 'main' | 'create' | 'request' | 'createAsset';
 type TopNav = { onPrev:()=>void; onNext:()=>void; prevDisabled:boolean; nextDisabled:boolean };
 
 const choiceCopy: Record<ReviewChoice, string> = { BUY_NOW:'现在购买', SAVE_FIRST:'存钱购买', WAIT:'这次不买' };
-const typeCopy: Record<Asset['type'], string> = { COURSE:'课程', MEMBERSHIP:'会员', STORED_VALUE:'储值', ITEM:'实物' };
+const typeCopy: Record<Asset['type'], string> = { COURSE:'课程/次卡', MEMBERSHIP:'会员/订阅', STORED_VALUE:'储值/余额', ITEM:'高价值实物', EXPERIENCE:'一次性体验/消耗品', OTHER:'其他' };
 
 async function readApi<T>(response:Response):Promise<T> {
   const raw = await response.text();
@@ -22,7 +23,7 @@ async function readApi<T>(response:Response):Promise<T> {
 }
 
 const fallbackData: AppData = {
-  requests:[{ id:'request-iceland', name:'去冰岛看极光', price:18600, reason:'二十七岁以前，想认真地去一次很远的地方。不是逃离，是奖励自己终于学会独自出发。', category:'旅行体验', total_units:7, usage_frequency:'一次完整旅行', expiry_date:null, product_url:null, similar_item:null, status:'REVIEWING', review_token:'iceland-demo-2026', created_at:'2026-08-21T10:00:00Z', review_count:3 }],
+  requests:[{ id:'request-iceland', name:'去冰岛看极光', price:18600, reason:'二十七岁以前，想认真地去一次很远的地方。不是逃离，是奖励自己终于学会独自出发。', type:'SINGLE_USE', category:'一次性体验/消耗品', total_units:1, usage_frequency:'一次完整旅行', expiry_date:null, product_url:null, similar_item:null, status:'REVIEWING', review_token:'iceland-demo-2026', created_at:'2026-08-21T10:00:00Z', review_count:3 }],
   reviews:[
     { id:'r1', request_id:'request-iceland', reviewer_name:'桃子', choice:'SAVE_FIRST', comment:'这件事你念叨很久了，值得去。慢一点准备，会更安心。', created_at:'2026-08-22T10:00:00Z' },
     { id:'r2', request_id:'request-iceland', reviewer_name:'晴晴', choice:'BUY_NOW', comment:'支持出发，但别忘了把冬季装备和保险算进预算。', created_at:'2026-08-22T11:00:00Z' },
@@ -40,9 +41,10 @@ const fallbackData: AppData = {
     { id:'asset-pottery', name:'六次陶艺体验课', type:'COURSE', purchase_price:980, total_units:6, used_units:3, current_balance:null, expiry_date:'2026-09-10', usage_count:3, last_used_at:'2026-08-11' },
     { id:'asset-headphones', name:'降噪耳机', type:'ITEM', purchase_price:2499, total_units:null, used_units:0, current_balance:null, expiry_date:null, usage_count:32, last_used_at:'2026-08-23' },
   ],
+  assetReflections:[],
 };
 
-const emptyData: AppData = { requests:[], reviews:[], invites:[], decisions:[], savingGoals:[], assets:[] };
+const emptyData: AppData = { requests:[], reviews:[], invites:[], decisions:[], savingGoals:[], assets:[], assetReflections:[] };
 
 function Flower({ progress=78, small=false }: { progress?:number; small?:boolean }) {
   return <div className={`wb-flower ${small?'is-small':''}`} aria-label={`电子花成长 ${progress}%`}><img className="wb-photo" src="/flower.webp" alt="" draggable={false}/></div>;
@@ -94,7 +96,7 @@ function HomeView({ data,onRequest,onTab,nav,nickname }: { data:AppData; onReque
 }
 
 function CreateRequest({ onBack,onCreated }: { onBack:()=>void; onCreated:(request:PurchaseRequest, invites:ReviewInvite[])=>void }) {
-  const [form,setForm] = useState({ name:'',price:'',reason:'',category:'课程',total_units:'',usage_frequency:'',expiry_date:'',product_url:'',similar_item:'' });
+  const [form,setForm] = useState({ name:'',price:'',reason:'',category:'高价值实物',total_units:'',usage_frequency:'',expiry_date:'',product_url:'',similar_item:'' });
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState('');
   const [image,setImage] = useState<File|null>(null);
@@ -128,7 +130,7 @@ function CreateRequest({ onBack,onCreated }: { onBack:()=>void; onCreated:(reque
   }
   async function submit(event:FormEvent) {
     event.preventDefault(); setBusy(true); setError('');
-    const payload = { ...form, price:Number(form.price), total_units:form.total_units?Number(form.total_units):null };
+    const payload = { ...form, type:categoryToType(form.category), price:Number(form.price), total_units:form.total_units?Number(form.total_units):null };
     try {
       const response = await cloudBaseFetch('/api/data',{ method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'create_request',payload}) });
       const output = await readApi<{request:PurchaseRequest;invites:ReviewInvite[]}>(response);
@@ -139,7 +141,7 @@ function CreateRequest({ onBack,onCreated }: { onBack:()=>void; onCreated:(reque
   return <><TopBar title="种下新愿望" onBack={onBack}/><form className="request-form" onSubmit={submit}><div className="form-intro"><span>01 · 说清楚想要</span><h1>这次，你想把什么<br/>带进生活？</h1><p>没有标准答案，先用自己的话讲明白。</p></div>
     <section className="ai-intake"><span>AI · 帮你抄清商品信息</span><h2>发链接，或者放一张截图</h2><p>AI 只整理名称、价格、次数和有效期；“为什么想要”仍然由你自己写。</p><label><span>商品 / 课程链接</span><input type="url" value={form.product_url} onChange={event=>update('product_url',event.target.value)} placeholder="https://"/></label><label className="ai-file"><span>商品截图</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={event=>setImage(event.target.files?.[0]||null)}/><i>{image?image.name:'选择 JPG / PNG / WebP，不超过 5MB'}</i></label><button type="button" className="ai-analyze" disabled={aiBusy} onClick={analyzeProduct}>{aiBusy?'正在读商品信息…':'让 AI 识别并填入'}</button>{aiError&&<p className="form-error">{aiError}</p>}{analysis&&<div className="ai-result"><b>✓ 已填入表单，请你核对</b><p>{analysis.summary}</p><small>识别把握 {Math.round(analysis.confidence*100)}%</small>{analysis.warnings.map(warning=><em key={warning}>{warning}</em>)}</div>}</section>
     <label><span>名称 *</span><input required value={form.name} onChange={event=>update('name',event.target.value)} placeholder="例如：十二节现代舞课程"/></label>
-    <div className="field-pair"><label><span>价格 *</span><div className="money-input"><i>¥</i><input required min="0" step="0.01" type="number" value={form.price} onChange={event=>update('price',event.target.value)} placeholder="0"/></div></label><label><span>类别 *</span><select value={form.category} onChange={event=>update('category',event.target.value)}><option>课程</option><option>会员</option><option>储值</option><option>实物</option><option>旅行体验</option></select></label></div>
+    <div className="field-pair"><label><span>价格 *</span><div className="money-input"><i>¥</i><input required min="0" step="0.01" type="number" value={form.price} onChange={event=>update('price',event.target.value)} placeholder="0"/></div></label><label><span>类别 *</span><select value={form.category} onChange={event=>update('category',event.target.value)}>{WISH_TYPE_OPTIONS.map(option=><option key={option.value} value={option.label}>{option.label}</option>)}</select></label></div>
     <label><span>为什么想要它？ *</span><textarea required rows={4} value={form.reason} onChange={event=>update('reason',event.target.value)} placeholder="是长久的愿望，还是生活里真正缺少的东西？"/></label>
     <div className="field-pair"><label><span>次数 / 天数</span><input min="0" type="number" value={form.total_units} onChange={event=>update('total_units',event.target.value)} placeholder="例如 12"/></label><label><span>有效期</span><DateField value={form.expiry_date} onChange={value=>update('expiry_date',value)}/></label></div>
     <label><span>预计怎么使用？</span><input value={form.usage_frequency} onChange={event=>update('usage_frequency',event.target.value)} placeholder="例如：每周去 1 次"/></label><label><span>已经有相似的东西吗？</span><input value={form.similar_item} onChange={event=>update('similar_item',event.target.value)} placeholder="没有的话可以留空"/></label>

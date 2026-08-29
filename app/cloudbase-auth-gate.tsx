@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, ReactNode, useEffect, useState } from 'react';
-import { AUTH_TOKEN_KEY, AUTH_USER_KEY, clearStoredSession, configureCloudBaseClient, isCloudBaseClientConfigured, type CloudBaseClientConfig } from '@/lib/cloudbase/client';
+import { AUTH_TOKEN_KEY, AUTH_USER_KEY, clearStoredSession, cloudBaseFetch, configureCloudBaseClient, isCloudBaseClientConfigured, type CloudBaseClientConfig } from '@/lib/cloudbase/client';
 
 type AuthMode = 'login' | 'register';
 type RegisterStep = 'credentials' | 'verify';
@@ -44,6 +44,9 @@ export default function CloudBaseAuthGate({ children, config }: { children: Reac
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [shoppingOnboarding,setShoppingOnboarding]=useState(false);
+  const [shoppingImages,setShoppingImages]=useState<string[]>([]);
+  const [shoppingConsent,setShoppingConsent]=useState(false);
 
   useEffect(() => {
     if (!configured) return;
@@ -104,7 +107,7 @@ export default function CloudBaseAuthGate({ children, config }: { children: Reac
         if (step === 'verify') {
           const output = await authRequest({ action: 'verify', email: payload.email, code: verificationCode.trim(), nickname: payload.nickname, password: payload.password, verificationId, isUser });
           saveSession(output);
-          setSignedIn(true);
+          if(isUser)setSignedIn(true);else setShoppingOnboarding(true);
         } else {
           const output = await authRequest({ action: 'register', email: payload.email, password: payload.password });
           setVerificationId(output.verificationId ?? '');
@@ -124,8 +127,26 @@ export default function CloudBaseAuthGate({ children, config }: { children: Reac
     }
   }
 
+  async function chooseShoppingImages(files:FileList|null){
+    const selected=Array.from(files??[]).slice(0,3);
+    try{
+      const values=await Promise.all(selected.map(file=>new Promise<string>((resolve,reject)=>{if(file.size>5*1024*1024){reject(new Error('每张图片不能超过 5MB'));return}const reader=new FileReader();reader.onload=()=>resolve(String(reader.result||''));reader.onerror=()=>reject(new Error('图片读取失败'));reader.readAsDataURL(file)})));
+      setShoppingImages(values);setError('');
+    }catch(reason){setError(reason instanceof Error?reason.message:'图片读取失败')}
+  }
+
+  async function importShoppingProfile(){
+    if(!shoppingConsent){setError('请先确认这是自愿提供，并了解保存范围');return}
+    if(!shoppingImages.length){setError('请先选择 1–3 张购物截图');return}
+    setBusy(true);setError('');
+    try{const response=await cloudBaseFetch('/api/profile/shopping-import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({images:shoppingImages,consent:true})});const output=await response.json() as {error?:string};if(!response.ok)throw new Error(output.error||'整理失败');setSignedIn(true);setShoppingOnboarding(false)}
+    catch(reason){setError(reason instanceof Error?reason.message:'整理失败，请稍后再试')}
+    finally{setBusy(false)}
+  }
+
   if (!configured) return children;
   if (checking) return <main className="auth-stage"><section className="auth-card auth-loading-card"><div className="auth-loading"><span className="auth-mark" aria-hidden="true">好</span><b>WORTHBLOOM</b><p>正在打开你的好好花…</p><i aria-hidden="true"/></div></section></main>;
+  if(shoppingOnboarding)return <main className="auth-stage"><section className="auth-card auth-onboarding"><div className="auth-panel"><p className="auth-overline">OPTIONAL · 可跳过</p><h1>愿意让我们了解<br/>你过去关注过什么吗？</h1><p className="auth-intro">可以选择 1–3 张历史购物截图或购物车截图。AI 只整理商品名称、类型和价格，用来让之后的提醒更贴近你。</p><label className="auth-shopping-upload"><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={event=>void chooseShoppingImages(event.target.files)}/><b>{shoppingImages.length?`已选择 ${shoppingImages.length} 张`:'选择购物截图'}</b><span>完成一次可获得 20 好好值</span></label><label className="auth-consent"><input type="checkbox" checked={shoppingConsent} onChange={event=>setShoppingConsent(event.target.checked)}/><span>我自愿提供这些截图，并了解系统默认不长期保存原图，只保存 AI 提取后的商品名称、类型、价格和识别置信度。</span></label>{error&&<p className="form-error">{error}</p>}<button className="main-button" disabled={busy} onClick={()=>void importShoppingProfile()}>{busy?'AI 正在整理…':'整理并进入好好花'}</button><button className="auth-skip" disabled={busy} onClick={()=>{setShoppingOnboarding(false);setSignedIn(true)}}>暂时跳过</button></div></section></main>;
   if (signedIn) return children;
 
   return <main className="auth-stage"><section className="auth-card">

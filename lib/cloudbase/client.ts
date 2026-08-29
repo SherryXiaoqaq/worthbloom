@@ -10,6 +10,8 @@
 
 export const AUTH_TOKEN_KEY = 'wb-auth-token';
 export const AUTH_USER_KEY = 'wb-auth-user';
+/** 本地演示模式的会话标记：没有真实账号，用这个键记录是否已"登录"。 */
+export const DEMO_SESSION_KEY = 'wb-demo-signed-in';
 
 let runtimeConfig: CloudBaseClientConfig | null = null;
 
@@ -38,6 +40,7 @@ export function clearStoredSession() {
   try {
     localStorage.removeItem(AUTH_TOKEN_KEY);
     localStorage.removeItem(AUTH_USER_KEY);
+    localStorage.removeItem(DEMO_SESSION_KEY);
   } catch { /* 隐私模式等场景忽略 */ }
 }
 

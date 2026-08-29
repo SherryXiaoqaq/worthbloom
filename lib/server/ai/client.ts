@@ -88,9 +88,14 @@ export async function generateJson({
   preferFast?: boolean;
 }) {
   const settings = config();
+  const imageUrl = image
+    ? image.base64.startsWith('data:')
+      ? image.base64
+      : `data:${image.mimeType};base64,${image.base64}`
+    : '';
   const content: ChatContent = image
     ? [
-        { type: 'image_url', image_url: { url: image.base64 } },
+        { type: 'image_url', image_url: { url: imageUrl } },
         { type: 'text', text: prompt },
       ]
     : prompt;

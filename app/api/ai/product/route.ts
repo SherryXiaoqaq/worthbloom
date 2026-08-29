@@ -2,12 +2,13 @@ import type { ProductAnalysis, WishCategory } from '@/lib/ai-types';
 import { AiAuthorizationError, authorizeAiRequest } from '@/lib/server/ai/authorize';
 import { AiServiceError, generateJson } from '@/lib/server/ai/client';
 import { ProductSourceError, readProductPage } from '@/lib/server/ai/product-source';
+import { categoryToType, typeToCategory } from '@/lib/wish-compat';
 
 export const dynamic = 'force-dynamic';
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-const categories: WishCategory[] = ['课程', '会员', '储值', '实物', '旅行体验'];
+const categories: WishCategory[] = ['高价值实物', '一次性体验/消耗品', '会员/订阅', '储值/余额', '课程/次卡', '其他'];
 
 function bytesToBase64(bytes: Uint8Array) {
   let binary = '';
@@ -33,7 +34,9 @@ function stringArray(value: unknown, maxItems = 5) {
 }
 
 function normalizeAnalysis(raw: Record<string, unknown>, sourceWarnings: string[]): ProductAnalysis {
-  const category = categories.includes(raw.category as WishCategory) ? raw.category as WishCategory : '实物';
+  const rawCategory = typeof raw.category === 'string' ? raw.category : '';
+  const normalizedCategory = typeToCategory(categoryToType(rawCategory)) as WishCategory;
+  const category = categories.includes(normalizedCategory) ? normalizedCategory : '其他';
   const expiry = stringOrNull(raw.expiry_date, 10);
   const confidence = Number(raw.confidence);
   return {
@@ -79,7 +82,7 @@ export async function POST(request: Request) {
     const schemaExample = {
       name: '商品或服务名称，无法确认则为 null',
       price: '人民币数字，无法确认则为 null',
-      category: '课程/会员/储值/实物/旅行体验 五选一',
+      category: '六选一：高价值实物 | 一次性体验/消耗品 | 会员/订阅 | 储值/余额 | 课程/次卡 | 其他',
       total_units: '次数、节数或天数，无法确认则为 null',
       usage_frequency: '适合如何使用的客观信息，无法确认则为 null',
       expiry_date: '明确截止日期 YYYY-MM-DD，无法确认则为 null',
@@ -89,7 +92,7 @@ export async function POST(request: Request) {
       warnings: ['不确定、优惠价条件或需用户核对的内容'],
     };
     const { data, meta } = await generateJson({
-      system: '你是 WorthBloom 的商品信息整理助手。只提取图片和网页中有依据的信息，不猜测、不编造，也不要替用户写购买理由。价格优先使用实际到手价；如果存在会员价、定金或优惠条件，放进 warnings。只返回合法 JSON。',
+      system: '你是 WorthBloom 的商品信息整理助手。只提取图片和网页中有依据的信息，不猜测、不编造，也不要替用户写购买理由。分类只有六类：高价值实物；一次性体验/消耗品（包含活动和旅行体验）；会员/订阅（一段时间内次数不限）；储值/余额（总价值确定）；课程/次卡（一段时间内次数有限）；其他。价格优先使用实际到手价；如果存在会员价、定金或优惠条件，放进 warnings。只返回合法 JSON。',
       prompt: [
         `今天是 ${new Date().toISOString().slice(0, 10)}。`,
         page?.promptText || (sourceUrl ? `用户提供的原始链接：${sourceUrl}` : ''),

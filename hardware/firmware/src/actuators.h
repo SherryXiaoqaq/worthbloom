@@ -11,6 +11,5 @@ class Actuators {
 
  private:
   void setServoAngle(int angle);
-  unsigned long vibrationEndsAt_ = 0;
   FlowerMode lastMode_ = FlowerMode::SEED;
 };

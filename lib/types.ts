@@ -17,6 +17,7 @@ export type WishType =
   | 'DURABLE_GOOD'
   | 'SINGLE_USE'
   | 'MEMBERSHIP'
+  | 'STORED_VALUE'
   | 'EXPERIENCE'
   | 'OTHER';
 
@@ -38,6 +39,9 @@ export interface ProductSnapshot {
   skuLabel?:string|null;
   details?:string|null;
   sourcePlatform?:string|null;
+  totalUnits?:number|null;
+  usageFrequency?:string|null;
+  expiryDate?:string|null;
   images?:WishImage[];
   confidence:number;
   needs_confirmation:true;
@@ -62,9 +66,10 @@ export interface WishImage { id:string; url:string; sortOrder:number; isCover:bo
 export const usageFrequencyOptions: Record<WishType, string[]> = {
   COURSE_TRAINING: ['每周多次', '每周一次', '每月一至两次', '暂不确定'],
   DURABLE_GOOD: ['每天', '每周', '每月', '偶尔', '暂不确定'],
-  SINGLE_USE: ['单次使用', '偶尔复购', '经常复购', '暂不确定'],
+  SINGLE_USE: ['单次使用 / 参与', '偶尔复购 / 再次参与', '经常复购', '暂不确定'],
   MEMBERSHIP: ['每天', '每周', '每月', '暂不确定'],
-  EXPERIENCE: ['单次参与', '周期参与', '暂不确定'],
+  STORED_VALUE: ['每周', '每月', '偶尔', '暂不确定'],
+  EXPERIENCE: ['单次使用 / 参与', '偶尔复购 / 再次参与', '经常复购', '暂不确定'],
   OTHER: ['经常', '偶尔', '单次使用', '暂不确定'],
 };
 
@@ -136,8 +141,23 @@ export interface ReviewContext {
 export interface ReviewInvite { id:string; request_id:string; token:string; label:string; used_by:string|null; used_at:string|null; revoked:number; created_at:string; }
 export interface Decision { request_id:string; decision:ReviewChoice; decided_at:string; }
 export interface SavingGoal { id:string; request_id:string|null; name:string; target:number; current:number; weekly_plan:number|null; created_at:string; }
-export interface Asset { id:string; name:string; type:'COURSE'|'MEMBERSHIP'|'STORED_VALUE'|'ITEM'; purchase_price:number; total_units:number|null; used_units:number; current_balance:number|null; expiry_date:string|null; usage_count:number; last_used_at:string|null; bloom_until?:string|null; recovering_until?:string|null; }
-export interface AppData { requests:PurchaseRequest[]; reviews:Review[]; invites:ReviewInvite[]; decisions:Decision[]; savingGoals:SavingGoal[]; assets:Asset[]; }
+export interface Asset { id:string; request_id?:string|null; name:string; type:'COURSE'|'MEMBERSHIP'|'STORED_VALUE'|'ITEM'|'EXPERIENCE'|'OTHER'; purchase_price:number; total_units:number|null; used_units:number; current_balance:number|null; expiry_date:string|null; usage_count:number; last_used_at:string|null; archived_at?:string|null; bloom_until?:string|null; recovering_until?:string|null; }
+export type AssetReflectionFeeling = 'BECAME_PART_OF_LIFE'|'SOMETIMES_USEFUL'|'BARELY_USED'|'NOT_FOR_ME';
+export interface AssetReflection {
+  id:string;
+  asset_id:string;
+  asset_name:string;
+  asset_type:Asset['type'];
+  feeling:AssetReflectionFeeling;
+  rating?:1|2|3|4|5|null;
+  would_buy_again:'YES'|'MAYBE'|'NO';
+  note:string;
+  trigger:'MANUAL'|'COMPLETED'|'EXPIRED';
+  usage_count:number;
+  cost_per_use:number|null;
+  created_at:string;
+}
+export interface AppData { requests:PurchaseRequest[]; reviews:Review[]; invites:ReviewInvite[]; decisions:Decision[]; savingGoals:SavingGoal[]; assets:Asset[]; assetReflections:AssetReflection[]; }
 
 // Spec §7.1 Agent
 export interface AgentMessage {
@@ -196,7 +216,7 @@ export interface UserProfile {
 export interface GrowthAccount {
   userId:string;
   points:number;
-  level:1|2|3|4;
+  level:1|2|3|4|5;
   nextLevelPoints?:number;
   updatedAt?:string;
 }
@@ -251,4 +271,22 @@ export interface DeviceState {
   days_left:number|null;
   message:string;
   asset_id:string|null;
+  request_id?:string|null;
+}
+export interface ShoppingProfileItem {
+  id:string;
+  name:string;
+  type:WishType;
+  category:string;
+  price:number|null;
+  sourceImageIndex:number;
+  confidence:number;
+}
+export interface ShoppingProfile {
+  userId:string;
+  source:'REGISTER_SCREENSHOTS';
+  consentedAt:string;
+  items:ShoppingProfileItem[];
+  categoryCounts:Record<string,number>;
+  updatedAt:string;
 }

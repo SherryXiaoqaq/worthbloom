@@ -1,5 +1,7 @@
 # WorthBloom · 好好花
 
+“好好值”的当前计分和等级规则见 [docs/growth-rules.md](docs/growth-rules.md)。
+
 一个面向移动网页的消费决策与物资陪伴产品：把“想买”变成可讨论、可储蓄、可追踪的长期过程。
 
 > 项目阶段：P1 可运行原型（更新于 2026-08-25）  
@@ -110,7 +112,7 @@ ZHIPU_TEXT_FALLBACK_MODEL=glm-4-flash-250414
 - CloudBase 环境 ID 与地域
 - Publishable Key
 - 服务端 API Key
-- 7 个文档数据库集合
+- 17 个文档数据库集合
 - 邮箱登录与安全来源
 
 完整步骤见 [`CLOUDBASE_SETUP.md`](CLOUDBASE_SETUP.md)。

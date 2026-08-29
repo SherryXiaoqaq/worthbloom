@@ -368,7 +368,165 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .auth-notice,.auth-form .form-error{margin:0 0 15px;padding:11px 13px;border:0;border-radius:14px;font-size:11px;line-height:1.55}
 .auth-notice{background:#f2f8e5;color:#61743c}.auth-form .form-error{background:#fff0f3;color:#8b4555}
 .auth-footnote{display:block;margin-top:16px;color:#989ca2;text-align:center;font-size:9px;line-height:1.55}
+.auth-onboarding{display:grid;align-items:center;padding:24px 0}.auth-onboarding .auth-panel{margin:0 18px}.auth-onboarding h1{margin:8px 0 12px;font-size:28px;line-height:1.25}.auth-shopping-upload{display:grid;place-items:center;min-height:112px;margin:20px 0 13px;border:1px dashed #cbd1c4;border-radius:18px;background:#f7faef;cursor:pointer}.auth-shopping-upload input{position:absolute;opacity:0;pointer-events:none}.auth-shopping-upload b{font-size:14px}.auth-shopping-upload span{margin-top:5px;color:#718060;font-size:11px}.auth-consent{display:flex;align-items:flex-start;gap:9px;margin:0 1px 16px;color:#70757d;font-size:10px;line-height:1.55}.auth-consent input{flex:none;margin-top:2px}.auth-onboarding .form-error{margin:0 0 12px;padding:11px 13px;border-radius:14px;background:#fff0f3;color:#8b4555;font-size:11px}.auth-skip{display:block;margin:13px auto 0;border:0;background:transparent;color:#7b8087;font-size:12px}
 .auth-loading-card{display:grid;place-items:center;background:radial-gradient(circle at 72% 20%,#fff,transparent 33%),linear-gradient(145deg,#fff0a0,#fff8ce 58%,#fff)}
 .auth-loading{display:flex;flex-direction:column;align-items:center;color:#1f2329}.auth-loading .auth-mark{width:68px;height:68px;border-radius:23px;font-size:29px}.auth-loading b{margin-top:18px;font-size:10px;letter-spacing:.2em}.auth-loading p{margin:7px 0 22px;color:#706a46;font-size:11px}.auth-loading>i{width:96px;height:5px;border-radius:99px;background:linear-gradient(90deg,#202a26 0 42%,rgba(31,41,37,.12) 42%);animation:auth-pulse 1.3s ease-in-out infinite}
 @keyframes auth-pulse{50%{opacity:.42;transform:scaleX(.92)}}
 @media(max-width:420px){.auth-hero{min-height:312px;padding-left:21px;padding-right:21px}.auth-hero h1{font-size:29px}.auth-panel{margin-left:12px;margin-right:12px;padding-left:17px;padding-right:17px;border-radius:25px}}
+
+/* ============================================================
+   WorthBloom · Warm Editorial global surfaces
+   登录门、朋友回信页与私密落地页共享同一品牌光影。
+   ============================================================ */
+:root{
+  --paper:#f7f0e7;
+  --card:#fffaf4;
+  --ink:#3b2b27;
+  --muted:#7e6b64;
+  --faint:#aa9991;
+  --sage:#7f9185;
+  --sage-dark:#586c60;
+  --sage-soft:#e7ece7;
+  --blush:#b66e59;
+  --blush-soft:#f8e8e2;
+  --brass:#b6915d;
+  --hairline:rgba(111,79,67,.14);
+  --shadow:0 24px 58px rgba(101,69,57,.10),0 8px 24px rgba(91,108,105,.055),inset 0 1px 0 rgba(255,255,255,.88);
+}
+body{
+  background:
+    radial-gradient(ellipse at 13% 3%,rgba(255,251,239,.92),transparent 35%),
+    radial-gradient(ellipse at 86% 12%,rgba(214,223,219,.5),transparent 34%),
+    linear-gradient(135deg,#e8e0d5,#dfe3e0 52%,#e7dbd2);
+  color:var(--ink);
+}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline-color:var(--blush)}
+.auth-stage{
+  color:var(--ink);
+  background:
+    radial-gradient(ellipse at 16% 6%,rgba(255,252,242,.96),transparent 38%),
+    radial-gradient(ellipse at 84% 16%,rgba(216,225,221,.6),transparent 34%),
+    linear-gradient(135deg,#eadfd3,#dfe3e0 52%,#e5d7cf);
+}
+.auth-card{
+  background:
+    radial-gradient(circle at 92% 4%,rgba(224,231,227,.56),transparent 28%),
+    linear-gradient(180deg,#fbf5ee,#f8efe7 62%,#faf6f0);
+  border-inline:1px solid rgba(255,255,255,.62);
+  box-shadow:0 32px 90px rgba(70,51,45,.16),0 0 0 1px rgba(100,79,68,.06);
+}
+.auth-hero{
+  background:
+    linear-gradient(112deg,rgba(255,255,255,.62),transparent 30%),
+    radial-gradient(ellipse at 85% 8%,rgba(229,196,179,.7),transparent 34%),
+    radial-gradient(ellipse at 8% 16%,rgba(255,248,235,.95),transparent 37%),
+    linear-gradient(145deg,#f1d3c3,#f7e7dc 62%,#e4ebe7);
+  box-shadow:0 18px 48px rgba(105,72,60,.08);
+}
+.auth-brand b,.auth-hero h1,.auth-onboarding h1,.private-card h1,.wish-letter h1,.thanks-card h1{
+  font-family:"Songti SC","STSong","Noto Serif CJK SC","Source Han Serif SC",SimSun,serif;
+  color:var(--ink);
+  font-weight:600;
+  letter-spacing:.015em;
+}
+.auth-mark{
+  border:1px solid rgba(255,255,255,.78);
+  border-radius:50%;
+  background:linear-gradient(145deg,rgba(255,252,246,.95),rgba(242,219,208,.88));
+  color:#8e5849;
+  box-shadow:0 14px 28px rgba(128,82,66,.12),inset 0 1px 0 rgba(255,255,255,.94);
+}
+.auth-brand small,.auth-intro{color:#75645d}
+.auth-overline{color:#a46350}
+.auth-hero-decoration{border-color:rgba(182,110,89,.12);background:rgba(255,250,245,.24);color:rgba(137,82,66,.17)}
+.auth-hero-decoration i{background:rgba(103,126,114,.16)}
+.auth-panel{
+  border:1px solid rgba(255,255,255,.74);
+  background:linear-gradient(145deg,rgba(255,253,250,.91),rgba(255,247,242,.84));
+  box-shadow:0 26px 64px rgba(92,63,53,.13),0 8px 24px rgba(91,108,105,.055),inset 0 1px 0 rgba(255,255,255,.94);
+  backdrop-filter:blur(20px) saturate(115%);
+}
+.auth-tabs{background:rgba(225,217,210,.48);box-shadow:inset 0 2px 7px rgba(87,65,56,.045)}
+.auth-tabs button{color:#9a8982;transition:background-color .24s ease,box-shadow .24s ease,color .24s ease}
+.auth-tabs button.active{background:rgba(255,252,248,.9);color:var(--ink);box-shadow:0 8px 18px rgba(94,66,55,.09),inset 0 1px 0 #fff}
+.auth-form label>span{color:#75645d}
+.auth-form input{
+  border-color:rgba(111,79,67,.14);
+  background:rgba(255,252,249,.76);
+  color:var(--ink);
+  box-shadow:inset 0 2px 7px rgba(88,65,56,.035),inset 0 1px 0 rgba(255,255,255,.85);
+}
+.auth-form input:focus{border-color:rgba(182,110,89,.58);background:#fffdfa;box-shadow:0 0 0 3px rgba(231,183,170,.22),inset 0 1px 0 #fff}
+.auth-form .main-button{
+  background:linear-gradient(145deg,#513c35,#392c29);
+  color:#fffaf3;
+  box-shadow:0 14px 30px rgba(68,47,41,.2),inset 0 1px 0 rgba(255,255,255,.13);
+}
+.auth-notice{background:#e9eee9;color:#5c7064}
+.auth-form .form-error,.auth-onboarding .form-error{background:#f9e5e1;color:#9b4f46}
+.auth-footnote,.auth-skip{color:#99877f}
+.auth-shopping-upload{border-color:rgba(127,145,133,.32);background:linear-gradient(145deg,rgba(231,236,231,.78),rgba(252,247,241,.76));color:#53685c}
+.auth-shopping-upload span{color:#6e7c73}
+.auth-loading-card{background:radial-gradient(circle at 76% 17%,rgba(255,255,255,.9),transparent 32%),linear-gradient(145deg,#f1d3c3,#f7e7dc 58%,#e4ebe7)}
+.auth-loading{color:var(--ink)}
+.auth-loading p{color:#75645d}
+.auth-loading>i{background:linear-gradient(90deg,#b66e59 0 42%,rgba(182,110,89,.13) 42%)}
+.friend-stage,.private-stage{
+  background:
+    radial-gradient(ellipse at 16% 6%,rgba(255,252,242,.96),transparent 38%),
+    radial-gradient(ellipse at 84% 16%,rgba(216,225,221,.58),transparent 34%),
+    linear-gradient(135deg,#eadfd3,#dfe3e0 52%,#e5d7cf);
+}
+.friend-shell,.private-card,.phone-shell{
+  background-color:var(--paper);
+  background-image:
+    linear-gradient(112deg,rgba(255,255,255,.58),transparent 25%),
+    radial-gradient(ellipse at 86% 4%,rgba(224,231,227,.48),transparent 28%),
+    url('/leather.png');
+  border-color:rgba(255,255,255,.62);
+  box-shadow:0 30px 82px rgba(71,51,45,.14),inset 0 1px 0 rgba(255,255,255,.9);
+}
+.private-card{border-radius:4px 48px 4px 28px}
+.private-brand,.friend-brand>span{background:linear-gradient(145deg,#8f5c4e,#68463d);color:#fffaf4;box-shadow:0 10px 22px rgba(104,70,61,.16)}
+.private-flower{color:#c58470}
+.review-message,.wish-letter blockquote,.review-options>button,.friend-form input,.friend-form textarea{
+  border-color:rgba(111,79,67,.14);
+  background:rgba(255,251,247,.7);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.8);
+}
+.review-options>button.selected{border-color:rgba(182,110,89,.62);background:#fffaf5;box-shadow:0 0 0 2px rgba(231,183,170,.2) inset}
+.review-options i{background:var(--blush-soft);color:#975e4f}
+.review-options .selected em{background:var(--blush);border-color:var(--blush)}
+.friend-submit{background:linear-gradient(145deg,#513c35,#392c29);color:#fffaf3;box-shadow:0 14px 30px rgba(68,47,41,.2)}
+
+@media(prefers-reduced-motion:reduce){.auth-tabs button{transition:none}}
+
+/* ---- 对齐参考稿：窗边柔光、花形品牌与珊瑚主操作 ---- */
+body,.auth-stage,.friend-stage,.private-stage{
+  background-image:
+    linear-gradient(112deg,rgba(255,253,245,.78),transparent 30%),
+    repeating-linear-gradient(76deg,transparent 0 86px,rgba(111,73,54,.035) 87px 94px,transparent 95px 148px),
+    radial-gradient(ellipse at 86% 12%,rgba(218,225,220,.54),transparent 34%),
+    linear-gradient(135deg,#ece2d7,#e1e5e1 54%,#e8dbd2);
+}
+.auth-hero{
+  background-image:url('/worthbloom-botanical.svg'),linear-gradient(112deg,rgba(255,255,255,.68),transparent 30%),linear-gradient(145deg,#f2d6c7,#fae9df 65%,#e7ece7);
+  background-repeat:no-repeat;
+  background-position:116% 48%,center,center;
+  background-size:48% auto,auto,auto;
+}
+.auth-mark{background-image:url('/worthbloom-mark.svg'),linear-gradient(145deg,rgba(255,252,246,.95),rgba(242,219,208,.88));background-repeat:no-repeat;background-position:center;background-size:76%,auto;font-size:0}
+.auth-form .main-button,.friend-submit{
+  background-color:#df8263;
+  background-image:url('/worthbloom-botanical.svg'),linear-gradient(100deg,#df805f,#e98f70 58%,#d97558);
+  background-repeat:no-repeat;
+  background-position:118% 54%,center;
+  background-size:34% auto,auto;
+  color:#fffaf5;
+  box-shadow:0 14px 30px rgba(196,104,76,.2),inset 0 1px 0 rgba(255,255,255,.26);
+}
+.private-card,.wish-letter blockquote,.review-message{border-color:rgba(225,156,124,.28)}
+.private-card:after,.thanks-card:after{
+  content:"";position:absolute;right:-45px;bottom:-40px;width:240px;height:210px;background:url('/worthbloom-botanical.svg') center/contain no-repeat;opacity:.38;pointer-events:none
+}
+@media(min-width:820px){.auth-card{width:min(100%,960px)}.auth-panel{max-width:620px;margin-inline:auto}.friend-shell{width:min(100%,920px)}}
