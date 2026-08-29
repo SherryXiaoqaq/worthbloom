@@ -206,9 +206,7 @@ export function ProfileView({data,profile,growthAccount,growthEntries,unreadCoun
   const displayGrowthEntries=growthEntries.map(entry=>{const request=data.requests.find(item=>item.id===entry.referenceId);const asset=data.assets.find(item=>item.id===entry.referenceId);const title=entry.actionType==='daily_login'?'每日登录':entry.actionType==='login_streak'?'连续登录 7 天':entry.actionType==='invite_friend'?'邀请新用户':entry.actionType==='effective_share'?'有效分享':entry.actionType==='profile_completed'?'完善个人资料':entry.actionType==='review_claim'?'提供一份有效朋友回信':entry.actionType==='consumption_upload'?'上传一次消费记录':entry.actionType==='decision_with_reason'?`为「${request?.name||'心愿'}」写下决定理由`:entry.actionType==='asset_reflection'?`记录「${asset?.name||'已有物品'}」的真实体验`:entry.actionType;return{id:entry.id,title,date:entry.createdAt,points:entry.delta,limited:entry.limited}});
   const ready=data.requests.find(request=>request.status==='REVIEWING'&&data.reviews.some(review=>review.request_id===request.id));
   const latestDecision=[...data.decisions].sort((a,b)=>Date.parse(b.decided_at)-Date.parse(a.decided_at))[0];
-  const currentAssetCount=data.assets.filter(item=>!item.archived_at).length;
-  const tasks:Array<{id:string;eyebrow:string;title:string;action:()=>void}>=[];
-  if(unreadCount>0)tasks.push({id:'unread',eyebrow:`${unreadCount} 封未读`,title:'朋友的回信到了',action:()=>onNavigate('inbox')});
+  const tasks:Array<{id:string;eyebrow:string;title:string;action:()=>void}>=[];  if(unreadCount>0)tasks.push({id:'unread',eyebrow:`${unreadCount} 封未读`,title:'朋友的回信到了',action:()=>onNavigate('inbox')});
   if(ready)tasks.push({id:'ready',eyebrow:'可以决定了',title:`继续「${ready.name}」`,action:()=>onOpen(ready)});
   if(tasks.length<2&&data.savingGoals.length)tasks.push({id:'saving',eyebrow:'存钱进行中',title:`查看「${data.savingGoals[0].name}」`,action:()=>onNavigate('savings')});
   if(!tasks.length&&latestDecision)tasks.push({id:'recent',eyebrow:'最近完成',title:'回看一次清楚的决定',action:()=>onNavigate('decisions')});
@@ -217,7 +215,6 @@ export function ProfileView({data,profile,growthAccount,growthEntries,unreadCoun
     {label:'全部决定',value:data.decisions.length,copy:'Buy · Save · Wait',icon:'check' as IconName,view:'decisions' as View,tone:'blue'},
     {label:'朋友回信',value:unreadCount,copy:unreadCount?'还有未读回信':'真实意见都在这里',icon:'reply' as IconName,view:'inbox' as View,tone:'pink'},
     {label:'存钱目标',value:data.savingGoals.length,copy:data.savingGoals.length?'继续靠近目标':'暂无进行中目标',icon:'wallet' as IconName,view:'savings' as View,tone:'green'},
-    {label:'我的果实',value:currentAssetCount,copy:currentAssetCount?'记录使用与真实体验':'把已有物品放进来',icon:'fruit' as IconName,view:'assets' as View,tone:'yellow'},
   ];
   function chooseAvatar(event:React.ChangeEvent<HTMLInputElement>){
     const file=event.target.files?.[0];event.target.value='';if(!file)return;

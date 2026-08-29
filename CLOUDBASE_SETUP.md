@@ -20,7 +20,7 @@
 
 ## 2. 创建文档数据库集合
 
-进入“数据库 → 文档数据库”，逐个创建下面 17 个集合。权限都设为“仅管理员/服务端可读写”，不要设为所有人可读写：
+进入“数据库 → 文档数据库”，逐个创建下面 18 个集合。权限都设为“仅管理员/服务端可读写”，不要设为所有人可读写：
 
 1. `purchase_requests`
 2. `reviews`
@@ -29,16 +29,19 @@
 5. `saving_goals`
 6. `assets`
 7. `usage_records`
-8. `wish_images`
-9. `claim_tokens`
-10. `growth_accounts`
-11. `growth_ledger`
-12. `agent_sessions`
-13. `agent_messages`
-14. `agent_reports`
-15. `user_profiles`
-16. `inbox_states`
-17. `shopping_profiles`
+8. `asset_reflections`
+9. `wish_images`
+10. `claim_tokens`
+11. `growth_accounts`
+12. `growth_ledger`
+13. `agent_sessions`
+14. `agent_messages`
+15. `agent_reports`
+16. `user_profiles`
+17. `inbox_states`
+18. `shopping_profiles`
+
+注意：是 18 个集合。`asset_reflections`（物资回顾）容易被漏掉，但每次加载首页数据都会查询它，缺了它整个数据接口会报错，页面就会退回内置演示心愿。
 
 至少创建以下索引：
 
@@ -118,7 +121,7 @@ pnpm.cmd dev
 
 - 页面仍是本地演示数据：四个 `CLOUDBASE_*` 环境变量没有全部填写，或修改后没有重启 `pnpm.cmd dev`。
 - 登录报“非法来源”：把当前协议+域名（本地是 `http://localhost:3000`）加入安全来源。
-- 数据库提示集合不存在：检查 17 个集合名，必须与上面完全一致；尤其不要漏掉 Agent、claim、成长值、个人资料、购物画像、回信状态和心愿图片相关集合。
+- 数据库提示集合不存在：检查 18 个集合名，必须与上面完全一致；尤其不要漏掉 `asset_reflections` 以及 Agent、claim、成长值、个人资料、购物画像、回信状态和心愿图片相关集合。
 - 登录正常但 API 返回 401：确认浏览器和服务端使用的是同一个环境 ID，并检查系统时间。
 - 国内首次访问慢：CloudBase Run 最小实例数设为 1，并选择离主要用户近的上海地域。
 - 自定义大陆域名无法上线：需要先完成 ICP 备案；测试阶段可以先用 CloudBase 提供的默认域名。
