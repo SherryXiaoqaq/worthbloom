@@ -35,6 +35,7 @@ yarn-error.log*
 # local environment
 .env*
 !.env.example
+.worthbloom-local-state.json
 
 # deployment and generated files
 .vercel

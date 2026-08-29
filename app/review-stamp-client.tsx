@@ -6,6 +6,7 @@ import Link from 'next/link';
 import type { ReviewRole, ReviewStamp, ReviewLinkState, WishImage, WishType } from '@/lib/types';
 import { typeToCategory } from '@/lib/wish-compat';
 import { cloudBaseFetch } from '@/lib/cloudbase/client';
+import { isMultiProductWish, parseMultiProductOptions } from '@/lib/multi-product';
 import styles from './review-stamp-v2.module.css';
 
 type ReviewWish = { id:string; name:string; price:number; reason:string; concern?:string; type?:WishType; brand?:string; skuLabel?:string; details?:string; sourcePlatform?:string; productUrl?:string|null; images?:WishImage[]; revision?:number };
@@ -22,6 +23,7 @@ export default function ReviewStampClient(){
   const [wish,setWish]=useState<ReviewWish|null>(null);
   const [linkState,setLinkState]=useState<ReviewLinkState>('ACTIVE');
   const [role,setRole]=useState<ReviewRole|null>(null);const [stamp,setStamp]=useState<ReviewStamp|null>(null);const [picked,setPicked]=useState<string[]>([]);const [name,setName]=useState('');const [note,setNote]=useState('');
+  const [multiChoice,setMultiChoice]=useState('');
   const [loading,setLoading]=useState(true);const [busy,setBusy]=useState(false);const [error,setError]=useState('');const [done,setDone]=useState(false);const [stamping,setStamping]=useState(false);
   const [claimResult,setClaimResult]=useState<{points:number|null;claimed:boolean;reason:string|null}|null>(null);
   const [claimCredentials,setClaimCredentials]=useState<{reviewId:string;claimToken:string}|null>(null);
@@ -33,6 +35,7 @@ export default function ReviewStampClient(){
   function chooseStamp(value:ReviewStamp){setStamp(value);setStamping(true);navigator.vibrate?.(35);setTimeout(()=>setStamping(false),380)}
 
   async function submit(event:FormEvent){event.preventDefault();if(!role||!stamp||!picked.length){setError('请先选择你的身份、判断章和至少一个理由。');return}setBusy(true);setError('');try{const response=await fetch('/api/review',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token,reviewerName:name.trim()||'匿名朋友',reviewerRole:role,stamp,reasons:picked,note})});const data=await response.json() as {reviewId?:string;claimToken?:string;error?:string;code?:string};if(!response.ok)throw new Error(data.error||'提交失败');if(!data.reviewId||!data.claimToken)throw new Error('反馈已提交，但认领凭据缺失，请联系心愿主人。');const credentials={reviewId:data.reviewId,claimToken:data.claimToken};setClaimCredentials(credentials);sessionStorage.setItem(`wb-review-claim:${token}`,JSON.stringify(credentials));setDone(true)}catch(reason){setError(reason instanceof Error?reason.message:'提交失败')}finally{setBusy(false)}}
+  async function submitMulti(event:FormEvent){event.preventDefault();if(!multiChoice){setError('请先选一个建议。');return}if(!note.trim()){setError('请写一句理由，让她知道你为什么这样选。');return}setBusy(true);setError('');try{const isNone=multiChoice==='NONE';const response=await fetch('/api/review',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token,reviewerName:name.trim()||'匿名朋友',choice:isNone?'WAIT':'BUY_NOW',comment:`我建议：${isNone?'都不买':`选 ${multiChoice}`}\n理由：${note.trim()}`})});const data=await response.json() as {reviewId?:string;claimToken?:string;error?:string;code?:string};if(!response.ok)throw new Error(data.error||'提交失败');if(!data.reviewId||!data.claimToken)throw new Error('反馈已提交，但认领凭据缺失，请联系心愿主人。');const credentials={reviewId:data.reviewId,claimToken:data.claimToken};setClaimCredentials(credentials);sessionStorage.setItem(`wb-review-claim:${token}`,JSON.stringify(credentials));setDone(true)}catch(reason){setError(reason instanceof Error?reason.message:'提交失败')}finally{setBusy(false)}}
 
   async function tryClaim(){if(!claimCredentials){setClaimResult({claimed:false,points:null,reason:'认领凭据缺失'});return}setBusy(true);try{const response=await cloudBaseFetch('/api/review/claim',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(claimCredentials)});const data=await response.json() as {pointsAwarded?:number;code?:string;error?:string};if(response.ok){setClaimResult({claimed:true,points:data.pointsAwarded??null,reason:null});sessionStorage.removeItem(`wb-review-claim:${token}`)}else if(data.code==='AUTH_REQUIRED')setClaimResult({claimed:false,points:null,reason:'请先登录，再返回本页认领好好值'});else setClaimResult({claimed:false,points:null,reason:data.error||'认领失败'})}catch{setClaimResult({claimed:false,points:null,reason:'认领失败，请稍后重试'})}finally{setBusy(false)}}
 
@@ -40,22 +43,32 @@ export default function ReviewStampClient(){
   if((error&&!wish)||linkState!=='ACTIVE')return <main className={styles.stage}><section className={styles.card}><span className={styles.brand}>WORTHBLOOM · 好好花</span><h1>这张邀请卡已经合上</h1><p>{error||LINK_STATE_COPY[linkState]||'链接已失效'}</p><small>心愿主人完成决定或关闭征集后，这个链接会停止收集回信。</small></section></main>;
   if(done)return <main className={styles.stage}><section className={`${styles.card} ${styles.thanks}`}><div className={styles.seal}>收到</div><span className={styles.brand}>你的视角已经送达</span><h1>谢谢你认真看完，<br/>决定仍然属于她。</h1><p>你不会看到群聊里其他人的回答；同一链接仍可以由其他朋友独立填写。</p><p className={styles.cta}>{CTA_TEXT}</p>{!claimResult?.claimed&&<button type="button" className={styles.submit} disabled={busy||!claimCredentials} onClick={()=>void tryClaim()}>{busy?'正在认领…':'登录后认领好好值'}</button>}{claimResult?.claimed&&<small className={styles.claimOk}>已认领 {claimResult.points} 好好值</small>}{claimResult&&!claimResult.claimed&&claimResult.reason&&<small className={styles.claimHint}>{claimResult.reason}</small>}<Link className={styles.claimHome} href="/">前往好好花登录或注册</Link></section></main>;
 
+  const multiOptions=wish&&isMultiProductWish(wish)?parseMultiProductOptions(wish):[];
+  const isMulti=multiOptions.length>0;
   const images=wish?.images??[];const clampIndex=(n:number)=>Math.max(0,Math.min(n,Math.max(0,images.length-1)));
   const carousel=(<div className={styles.wishImage}>{images.length===0?<span className={styles.wishPlaceholder}>心愿</span>:<><img src={images[clampIndex(imgIndex)].url} alt={wish?.name||''}/>{images.length>1&&<><button type="button" className={styles.carouselPrev} onClick={()=>setImgIndex(i=>clampIndex(i-1))} aria-label="上一张">‹</button><button type="button" className={styles.carouselNext} onClick={()=>setImgIndex(i=>clampIndex(i+1))} aria-label="下一张">›</button><span className={styles.carouselDots}>{clampIndex(imgIndex)+1} / {images.length}</span></>}</>}</div>);
 
   return <main className={styles.stage}><div className={styles.shell}><header><span className={styles.brand}>WORTHBLOOM · 一封只给你的心愿卡</span><small>无需注册 · 看不到其他人的回答</small></header>
     {wish&&<>
-      <section className={styles.wish}>{carousel}
-        <span>{typeToCategory(wish.type)}</span><h1>{wish.name}</h1><b>¥{wish.price.toLocaleString()}</b><blockquote>“{wish.reason}”</blockquote>{wish.concern&&<p>她最担心：{wish.concern}</p>}
-        {(wish.brand||wish.skuLabel||wish.details||wish.sourcePlatform||wish.productUrl)&&<details className={styles.detailFold}><summary>详情</summary><div className={styles.detailGrid}><span>品牌：{wish.brand||'—'}</span><span>规格：{wish.skuLabel||'—'}</span><span>来源：{wish.sourcePlatform||'—'}</span>{wish.details&&<p>{wish.details}</p>}{wish.productUrl&&<a href={wish.productUrl} target="_blank" rel="noreferrer">查看原商品</a>}</div></details>}
+      <section className={styles.wish}>{!isMulti&&carousel}
+        <span>{isMulti?'多选一 · 请给她一个建议':typeToCategory(wish.type)}</span><h1>{isMulti?'她正在纠结这几个商品':wish.name}</h1>{!isMulti&&<b>¥{wish.price.toLocaleString()}</b>}<blockquote>“{wish.reason}”</blockquote>{!isMulti&&wish.concern&&<p>她最担心：{wish.concern}</p>}
+        {!isMulti&&(wish.brand||wish.skuLabel||wish.details||wish.sourcePlatform||wish.productUrl)&&<details className={styles.detailFold}><summary>详情</summary><div className={styles.detailGrid}><span>品牌：{wish.brand||'—'}</span><span>规格：{wish.skuLabel||'—'}</span><span>来源：{wish.sourcePlatform||'—'}</span>{wish.details&&<p>{wish.details}</p>}{wish.productUrl&&<a href={wish.productUrl} target="_blank" rel="noreferrer">查看原商品</a>}</div></details>}
       </section>
-      <form onSubmit={submit}>
+      {isMulti?<form onSubmit={submitMulti}>
+        <section className={styles.step}><i>01</i><h2>你更建议她选哪个？</h2><p>选一个你最想推荐的，也可以建议她都先别买。</p><div className={styles.productChoices}>
+          {multiOptions.map(option=><button type="button" key={option.label} className={multiChoice===option.label?styles.productSelected:''} onClick={()=>setMultiChoice(option.label)}><b>{option.label}</b>{option.image?<img src={option.image.url} alt={`商品 ${option.label}`}/>:<span className={styles.productEmpty}>商品</span>}<span className={styles.productMeta}>{option.name&&<b>{option.name}</b>}{option.brand&&<small>{option.brand}</small>}{option.price!==null&&<small>¥{option.price.toLocaleString()}</small>}</span></button>)}
+          <button type="button" className={`${styles.noneChoice} ${multiChoice==='NONE'?styles.productSelected:''}`} onClick={()=>setMultiChoice('NONE')}><b>{String.fromCharCode(65+multiOptions.length)}</b><span>都不买</span></button>
+        </div></section>
+        <section className={styles.step}><i>02</i><h2>为什么这样建议？</h2><label><span>写给她看的理由</span><textarea maxLength={160} rows={4} value={note} onChange={event=>setNote(event.target.value)} placeholder="比如更实用、更适合她、预算不值得，或你觉得都先别买的原因。"/></label><label><span>你的昵称</span><input maxLength={20} value={name} onChange={event=>setName(event.target.value)} placeholder="选填，默认匿名朋友"/></label></section>
+        {error&&<p className={styles.error}>{error}</p>}
+        <button className={styles.submit} disabled={busy}>{busy?'正在送出…':'把建议送给她'}</button>
+      </form>:<form onSubmit={submit}>
         <section className={styles.step}><i>01</i><h2>你从哪个角度了解这件事？</h2><div className={styles.roles}>{roles.map(item=><button type="button" className={role===item.id?styles.selected:''} key={item.id} onClick={()=>setRole(item.id)}><b>{item.label}</b><span>{item.note}</span></button>)}</div></section>
         <section className={styles.step}><i>02</i><h2>盖下你此刻的判断</h2><p>这不是批准或驳回，只是给她一个真实视角。</p><div className={styles.stamps}>{stamps.map(item=><button type="button" className={`${stamp===item.id?styles.stampSelected:''} ${stamp===item.id&&stamping?styles.stamping:''}`} key={item.id} onClick={()=>chooseStamp(item.id)}><b>{item.label}</b><span>{item.note}</span></button>)}</div></section>
         <section className={styles.step}><i>03</i><h2>为什么这样判断？</h2><p>选 1–2 个最关键的理由就够了。</p><div className={styles.reasons}>{reasons.map(item=><button type="button" className={picked.includes(item)?styles.selected:''} key={item} onClick={()=>toggle(item)}>{item}</button>)}</div><label><span>想再补一句，可以写在这里</span><textarea maxLength={80} rows={3} value={note} onChange={event=>setNote(event.target.value)} placeholder="选填，最多 80 字"/></label><label><span>你的昵称</span><input maxLength={20} value={name} onChange={event=>setName(event.target.value)} placeholder="选填，默认匿名朋友"/></label></section>
         {error&&<p className={styles.error}>{error}</p>}
         <button className={styles.submit} disabled={busy}>{busy?'正在送出…':'把这个视角送给她'}</button>
-      </form>
+      </form>}
     </>}
   </div></main>;
 }

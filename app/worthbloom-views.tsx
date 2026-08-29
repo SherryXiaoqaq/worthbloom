@@ -5,12 +5,13 @@ import { clearStoredSession, cloudBaseFetch } from '@/lib/cloudbase/client';
 import type { AppData, Asset, AssetReflection, AssetReflectionFeeling, Decision, DeviceState, GrowthAccount, GrowthLedgerEntry, InboxItem, PurchaseRequest, Review, ReviewChoice, ReviewInvite, SavingGoal, UserProfile } from '@/lib/types';
 import { assetFinished, costPerUse, isAssetExpired, remainingUnits } from '@/lib/asset-rules';
 import { typeToCategory } from '@/lib/wish-compat';
-import { AgentPanel } from './agent-panel';
+import { isMultiProductWish, parseMultiProductOptions } from '@/lib/multi-product';
+import { AgentCouncil, AgentPanel } from './agent-panel';
 import styles from './worthbloom-v2.module.css';
 
 export type View = 'garden'|'profile'|'room'|'wishes'|'decisions'|'inbox'|'device'|'agent'|'savings'|'assets';
 
-type IconName='garden'|'plus'|'user'|'bell'|'chevron'|'back'|'flower'|'fruit'|'wish'|'check'|'reply'|'shield'|'help'|'device'|'sort'|'external'|'sparkle'|'share'|'settings'|'wallet'|'edit'|'camera'|'close';
+type IconName='garden'|'plus'|'user'|'bell'|'chevron'|'back'|'flower'|'fruit'|'wish'|'check'|'reply'|'shield'|'help'|'device'|'sort'|'external'|'sparkle'|'share'|'settings'|'wallet'|'edit'|'camera'|'close'|'history';
 
 export function Icon({name,size=22}:{name:IconName;size?:number}){
   const paths:Record<IconName,React.ReactNode>={
@@ -37,6 +38,7 @@ export function Icon({name,size=22}:{name:IconName;size?:number}){
     edit:<><path d="m4 20 4.2-1 10-10a2.1 2.1 0 0 0-3-3l-10 10Z"/><path d="m13.8 7.2 3 3"/></>,
     camera:<><path d="M5 7h3l1.5-2h5L16 7h3a2 2 0 0 1 2 2v9H3V9a2 2 0 0 1 2-2Z"/><circle cx="12" cy="12.5" r="3.2"/></>,
     close:<><path d="m6 6 12 12M18 6 6 18"/></>,
+    history:<><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6M12 8v4l3 2"/></>,
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -56,6 +58,25 @@ export function PageHeader({title,onBack,action}:{title:string;onBack:()=>void;a
 }
 
 function decisionCopy(choice:ReviewChoice){return choice==='BUY_NOW'?'现在购买':choice==='SAVE_FIRST'?'先存钱':'再等等'}
+function decisionNoteOf(request:PurchaseRequest){return request.decision_note||request.decisionNote||''}
+function multiDecisionFromNote(note:string){
+  const match=note.match(/(?:已选择购买|决定[:：]\s*买)\s*([A-Z])|(?:已选择先不买|决定[:：]\s*(?:先不买|都不买))/);
+  if(!match)return '';
+  if(match[1])return `已选择购买${match[1]}`;
+  return '已选择先不买';
+}
+function decisionCopyForRequest(request:PurchaseRequest,choice:ReviewChoice){
+  if(!isMultiProductWish(request))return decisionCopy(choice);
+  const noted=multiDecisionFromNote(decisionNoteOf(request));
+  if(noted)return noted;
+  if(choice==='WAIT')return '已选择先不买';
+  if(choice==='BUY_NOW')return '已选择购买';
+  return '已选择先不买';
+}
+function decisionReasonForRequest(request:PurchaseRequest){
+  const note=decisionNoteOf(request).split(/\r?\n/).map(line=>line.trim()).filter(line=>line&&!/^(?:已选择购买[A-Z]|已选择先不买|决定[:：]\s*(?:买\s*[A-Z]|先不买|都不买))$/.test(line)).join('\n');
+  return note||'当时没有补充决定理由。';
+}
 function statusCopy(request:PurchaseRequest){if(request.status==='REVIEWING')return request.review_count?'回信已到':'等待回信';if(request.status==='SAVING')return '先存钱';if(request.status==='PURCHASED')return '现在购买';return '再等等'}
 function categoryGlyph(category:string){if(category.includes('课程')||category.includes('训练'))return '课';if(category.includes('数码')||category.includes('商品'))return '物';return '愿'}
 function imageFor(request:PurchaseRequest){return request.image_url||request.images?.find(image=>image.isCover)?.url||request.images?.[0]?.url||''}
@@ -99,17 +120,18 @@ function DeviceStrip({state,onOpen}:{state:DeviceState;onOpen:()=>void}){
 }
 
 function ActiveWishCard({request,onOpen,onInvite}:{request:PurchaseRequest;onOpen:()=>void;onInvite:()=>void}){
+  const multiOptions=isMultiProductWish(request)?parseMultiProductOptions(request):[];
   return <article className={styles.activeCard}>
-    <button className={styles.wishImage} onClick={onOpen} aria-label={`查看 ${request.name}`}>{imageFor(request)?<img src={imageFor(request)} alt=""/>:<span className={styles.wishImageFallback}>{categoryGlyph(request.category??'')}</span>}<span>{request.category??''}</span></button>
+    <button className={styles.wishImage} onClick={onOpen} aria-label={`查看 ${request.name}`}>{imageFor(request)?<img src={imageFor(request)} alt=""/>:<span className={styles.wishImageFallback}>{categoryGlyph(request.category??'')}</span>}<span>{multiOptions.length?'多商品选择':request.category??''}</span></button>
     <div className={styles.cardTop}><span className={request.review_count?styles.pinkTag:styles.blueTag}>{statusCopy(request)}</span><small>{request.review_count} 条回信</small></div>
-    <button className={styles.cardMain} onClick={onOpen}><span className={styles.categoryIcon}>{categoryGlyph(request.category??'')}</span><div><h3>{request.name}</h3><p>{request.reason}</p><strong>¥{request.price.toLocaleString()}</strong></div></button>
+    <button className={styles.cardMain} onClick={onOpen}><span className={styles.categoryIcon}>{categoryGlyph(request.category??'')}</span><div><h3>{request.name}</h3><p>{request.reason}</p>{multiOptions.length?<div className={styles.cardProductList}>{multiOptions.map(option=><span key={option.label}><b>{option.name || `${option.label} 商品`}{option.brand ? ` · ${option.brand}` : ''}</b>{option.price!==null&&<em>¥{option.price.toLocaleString()}</em>}</span>)}</div>:<strong>¥{request.price.toLocaleString()}</strong>}</div></button>
     <button className={styles.cardAction} onClick={request.review_count?onOpen:onInvite}><span className={styles.cardActionIcon}><Icon name={request.review_count?'reply':'share'} size={16}/></span>{request.review_count?'查看回信并决定':'继续邀请'}<Icon name="chevron" size={17}/></button>
   </article>;
 }
 
 function DecisionCard({request,decision,goal,onOpen}:{request:PurchaseRequest;decision:Decision;goal?:SavingGoal;onOpen:()=>void}){
   const cls=decision.decision==='SAVE_FIRST'?styles.greenTag:decision.decision==='BUY_NOW'?styles.yellowTag:styles.grayTag;
-  return <article className={styles.decisionCard}><button onClick={onOpen} className={styles.decisionMain}>{imageFor(request)?<img className={styles.decisionImage} src={imageFor(request)} alt=""/>:<span className={`${styles.decisionImage} ${styles.decisionImageFallback}`}>{categoryGlyph(request.category??'')}</span>}<span><small className={cls}>{decisionCopy(decision.decision)}</small><h3>{request.name}</h3><p>{new Date(decision.decided_at).toLocaleDateString('zh-CN')} · ¥{request.price.toLocaleString()}</p>{goal&&<><div className={styles.progress}><i style={{width:`${Math.min(100,goal.current/goal.target*100)}%`}}/></div><em>已准备 ¥{goal.current.toLocaleString()} / ¥{goal.target.toLocaleString()}</em></>}</span><Icon name="chevron" size={18}/></button></article>;
+  return <article className={styles.decisionCard}><button onClick={onOpen} className={styles.decisionMain}>{imageFor(request)?<img className={styles.decisionImage} src={imageFor(request)} alt=""/>:<span className={`${styles.decisionImage} ${styles.decisionImageFallback}`}>{categoryGlyph(request.category??'')}</span>}<span><small className={cls}>{decisionCopyForRequest(request,decision.decision)}</small><h3>{request.name}</h3><p>{new Date(decision.decided_at).toLocaleDateString('zh-CN')} · ¥{request.price.toLocaleString()}</p>{goal&&<><div className={styles.progress}><i style={{width:`${Math.min(100,goal.current/goal.target*100)}%`}}/></div><em>已准备 ¥{goal.current.toLocaleString()} / ¥{goal.target.toLocaleString()}</em></>}</span><Icon name="chevron" size={18}/></button></article>;
 }
 
 export function GardenView({data,unreadReviews,unreadCount,onNavigate,onOpen,onInvite}:{data:AppData;unreadReviews:Review[];unreadCount:number;onNavigate:(view:View)=>void;onOpen:(request:PurchaseRequest)=>void;onInvite:(request:PurchaseRequest)=>void}){
@@ -143,11 +165,12 @@ export function GardenView({data,unreadReviews,unreadCount,onNavigate,onOpen,onI
 export function AgentHubView({data,onBack}:{data:AppData;onBack:()=>void}){
   const wishes=data.requests.filter(request=>request.status==='REVIEWING');
   const [selectedId,setSelectedId]=useState(wishes[0]?.id||'');
+  const [historyTrigger,setHistoryTrigger]=useState(0);
   const selected=wishes.find(request=>request.id===selectedId)||wishes[0];
-  return <section className={styles.subPage}><PageHeader title="AI 对话" onBack={onBack}/>
-    <aside className={styles.deviceIntro}><span className={styles.deviceIntroIcon}><Icon name="sparkle" size={22}/></span><div><h2>先问问自己</h2><p>AI 会陪你把想要、担心和现实条件理一遍，最后的决定仍然由你完成。</p><small>它提供整理和提问，不会替你下结论。</small></div></aside>
-    {wishes.length>1&&<section className={styles.agentWishPicker}><h2>选择要聊的心愿</h2><div>{wishes.map(request=><button key={request.id} className={selected?.id===request.id?styles.agentWishActive:''} onClick={()=>setSelectedId(request.id)}><span>{request.name}</span><small>¥{request.price.toLocaleString()}</small></button>)}</div></section>}
-    {selected?<AgentPanel requestId={selected.id} revision={selected.revision??1}/>:<div className={styles.emptyAction}><Icon name="sparkle"/><span><b>还没有正在征集意见的心愿</b><small>先种下一个心愿，再来和 AI 聊聊。</small></span></div>}
+  const cover=selected&&imageFor(selected);
+  return <section className={`${styles.subPage} ${styles.agentHubPage}`}><PageHeader title="AI 对话" onBack={onBack} action={<button className={styles.headerIconAction} aria-label="历史对话" onClick={()=>setHistoryTrigger(value=>value+1)}><Icon name="history"/></button>}/>
+    {selected&&<section className={styles.agentContextCard}>{cover?<img src={cover} alt=""/>:<span>{categoryGlyph(selected.category??'')}</span>}<label><small>正在讨论</small><select value={selected.id} onChange={event=>setSelectedId(event.target.value)}>{wishes.map(request=><option key={request.id} value={request.id}>{request.name}</option>)}</select><b>¥{selected.price.toLocaleString()}</b></label></section>}
+    {selected?<AgentCouncil request={selected} hasReviews={data.reviews.some(review=>review.request_id===selected.id)} historyTrigger={historyTrigger}/>:<div className={styles.emptyAction}><Icon name="sparkle"/><span><b>还没有正在征集意见的心愿</b><small>先种下一个心愿，再来和 AI 聊聊。</small></span></div>}
   </section>;
 }
 
@@ -180,7 +203,7 @@ export function ProfileView({data,profile,growthAccount,growthEntries,unreadCoun
   const points=growthAccount.points;
   const growth=growthLevel(points);
   const progress=growth.next==null?100:Math.max(0,Math.min(100,((points-growth.floor)/(growth.next-growth.floor))*100));
-  const displayGrowthEntries=growthEntries.map(entry=>{const request=data.requests.find(item=>item.id===entry.referenceId);const asset=data.assets.find(item=>item.id===entry.referenceId);const title=entry.actionType==='profile_completed'?'完善个人资料':entry.actionType==='decision_with_reason'?`为「${request?.name||'心愿'}」写下决定理由`:entry.actionType==='review_claim'?'提供一份有效朋友回信':entry.actionType==='asset_reflection'?`记录「${asset?.name||'已有物品'}」的真实体验`:entry.actionType==='shopping_profile_import'?'补充过去关注过的商品':entry.actionType;return{id:entry.id,title,date:entry.createdAt,points:entry.delta,limited:entry.limited}});
+  const displayGrowthEntries=growthEntries.map(entry=>{const request=data.requests.find(item=>item.id===entry.referenceId);const asset=data.assets.find(item=>item.id===entry.referenceId);const title=entry.actionType==='daily_login'?'每日登录':entry.actionType==='login_streak'?'连续登录 7 天':entry.actionType==='invite_friend'?'邀请新用户':entry.actionType==='effective_share'?'有效分享':entry.actionType==='profile_completed'?'完善个人资料':entry.actionType==='review_claim'?'提供一份有效朋友回信':entry.actionType==='consumption_upload'?'上传一次消费记录':entry.actionType==='decision_with_reason'?`为「${request?.name||'心愿'}」写下决定理由`:entry.actionType==='asset_reflection'?`记录「${asset?.name||'已有物品'}」的真实体验`:entry.actionType;return{id:entry.id,title,date:entry.createdAt,points:entry.delta,limited:entry.limited}});
   const ready=data.requests.find(request=>request.status==='REVIEWING'&&data.reviews.some(review=>review.request_id===request.id));
   const latestDecision=[...data.decisions].sort((a,b)=>Date.parse(b.decided_at)-Date.parse(a.decided_at))[0];
   const currentAssetCount=data.assets.filter(item=>!item.archived_at).length;
@@ -226,9 +249,9 @@ export function ProfileView({data,profile,growthAccount,growthEntries,unreadCoun
       <div className={styles.growthTasks}>{tasks.slice(0,2).map(task=><button key={task.id} onClick={task.action}><span><small>{task.eyebrow}</small><b>{task.title}</b></span><Icon name="chevron" size={17}/></button>)}</div>
     </section>
 
-    <section className={styles.profileSection}><div className={styles.profileSectionHeading}><small>MY SPACE</small><h2>我的记录</h2></div><div className={styles.profileCoreGrid}>{core.map(card=><button key={card.label} data-tone={card.tone} onClick={()=>onNavigate(card.view)}><span className={styles.profileCoreIcon}><Icon name={card.icon} size={27}/></span><b>{card.value}</b><strong>{card.label}</strong><small>{card.copy}</small><Icon name="chevron" size={17}/></button>)}</div></section>
+    <section className={`${styles.profileSection} ${styles.profileFeatureSection}`}><div className={styles.profileSectionHeading}><small>MY SPACE</small><h2>我的记录</h2></div><div className={styles.profileCoreGrid}>{core.map(card=><button key={card.label} data-tone={card.tone} onClick={()=>onNavigate(card.view)}><span className={styles.profileCoreIcon}><Icon name={card.icon} size={27}/></span><b>{card.value}</b><strong>{card.label}</strong><small>{card.copy}</small><Icon name="chevron" size={17}/></button>)}</div></section>
 
-    <section className={styles.profileSection}><div className={styles.profileSectionHeading}><small>常用工具</small><h2>常用功能</h2></div><div className={styles.profileUtilityGrid}><button onClick={()=>onNavigate('device')}><span><Icon name="flower" size={25}/></span><b>电子花</b><small>查看「{deriveDeviceSummary(data).title}」的进度</small></button><button onClick={()=>setPanel('PRIVACY')}><span><Icon name="shield" size={25}/></span><b>隐私与分享</b><small>{profile.shareIdentityDefault==='ANONYMOUS'?'默认匿名':'默认展示昵称'}</small></button></div></section>
+    <section className={styles.profileSection}><div className={styles.profileSectionHeading}><h2>常用功能</h2></div><div className={styles.profileUtilityGrid}><button onClick={()=>onNavigate('device')}><span><Icon name="flower" size={25}/></span><b>电子花</b><small>查看「{deriveDeviceSummary(data).title}」的进度</small></button><button onClick={()=>setPanel('PRIVACY')}><span><Icon name="shield" size={25}/></span><b>隐私与分享</b><small>{profile.shareIdentityDefault==='ANONYMOUS'?'默认匿名':'默认展示昵称'}</small></button></div></section>
 
     {panel!=='NONE'&&<div className={styles.profileOverlay} role="presentation" onMouseDown={event=>{if(event.currentTarget===event.target)setPanel('NONE')}}><section className={styles.profileSheet} role="dialog" aria-modal="true" aria-label={panel==='AVATAR'?'裁剪头像':panel==='EDIT'?'编辑资料':panel==='PRIVACY'?'隐私与分享':panel==='GROWTH'?'好好值规则与明细':panel==='DEVICES'?'新增设备':'设置'}><header><b>{panel==='AVATAR'?'调整头像':panel==='EDIT'?'编辑资料':panel==='PRIVACY'?'隐私与分享':panel==='GROWTH'?'好好值规则与明细':panel==='DEVICES'?'新增设备':'设置'}</b><button onClick={()=>setPanel('NONE')} aria-label="关闭"><Icon name="close"/></button></header>
       {panel==='SETTINGS'&&<div className={styles.profileSettingsList}><button onClick={()=>{setNickname(profile.nickname);setBio(profile.bio||'');setPanel('EDIT')}}><Icon name="edit"/><span><b>账户与资料</b><small>昵称、头像和个人简介</small></span><Icon name="chevron"/></button><button onClick={()=>setPanel('PRIVACY')}><Icon name="shield"/><span><b>隐私与分享</b><small>设置分享时的默认身份</small></span><Icon name="chevron"/></button><button onClick={()=>onNavigate('device')}><Icon name="device"/><span><b>电子花</b><small>查看花园进度，实体设备可选</small></span><Icon name="chevron"/></button><button onClick={()=>setPanel('DEVICES')}><Icon name="plus"/><span><b>新增设备</b><small>电子衣橱、智能冰箱贴（展示中）</small></span><Icon name="chevron"/></button><article><Icon name="help"/><span><b>关于好好花</b><small>朋友给出视角，工具帮你整理，最后仍由你决定。</small></span></article></div>}
@@ -236,7 +259,7 @@ export function ProfileView({data,profile,growthAccount,growthEntries,unreadCoun
       {panel==='EDIT'&&<form className={styles.profileEditForm} onSubmit={saveProfile}><label><span>昵称</span><input required maxLength={20} value={nickname} onChange={event=>setNickname(event.target.value)} placeholder="怎么称呼你"/></label><label><span>个人简介</span><textarea maxLength={80} value={bio} onChange={event=>setBio(event.target.value)} placeholder="写下一句留给未来自己的话"/></label><button type="button" className={styles.profileSecondaryAction} onClick={()=>fileRef.current?.click()}><Icon name="camera"/>更换头像</button>{profile.avatarUrl&&<button type="button" className={styles.profileDangerAction} disabled={profileBusy} onClick={()=>void removeAvatar()}>移除头像</button>}{profileError&&<p className={styles.profileInlineError}>{profileError}</p>}<button className={styles.profilePrimaryAction} disabled={profileBusy}>{profileBusy?'保存中…':'保存资料'}</button><button type="button" className={styles.profileDangerAction} onClick={signOut}>退出当前账号</button></form>}
       {panel==='AVATAR'&&<div className={styles.avatarEditor}><div className={styles.avatarCrop}><img src={avatarSource} alt="头像裁剪预览" style={{transform:`scale(${avatarZoom})`,transformOrigin:`${avatarX}% ${avatarY}%`}}/></div><label>缩放<input type="range" min="1" max="2" step=".05" value={avatarZoom} onChange={event=>setAvatarZoom(Number(event.target.value))}/></label><label>水平位置<input type="range" min="0" max="100" value={avatarX} onChange={event=>setAvatarX(Number(event.target.value))}/></label><label>垂直位置<input type="range" min="0" max="100" value={avatarY} onChange={event=>setAvatarY(Number(event.target.value))}/></label>{avatarError&&<p className={styles.profileInlineError}>{avatarError}</p>}<button className={styles.profilePrimaryAction} disabled={avatarBusy} onClick={()=>void saveAvatar()}>{avatarBusy?'处理中…':'使用这张头像'}</button></div>}
       {panel==='PRIVACY'&&<div className={styles.profilePrivacy}><p>头像会保存在你的账户资料中。分享心愿时，是否展示身份由你决定。</p><div><button disabled={profileBusy} className={profile.shareIdentityDefault==='ANONYMOUS'?styles.profileChoiceActive:''} onClick={()=>void savePrivacy('ANONYMOUS')}><b>默认匿名</b><small>朋友只看到匿名称呼</small></button><button disabled={profileBusy} className={profile.shareIdentityDefault==='NICKNAME'?styles.profileChoiceActive:''} onClick={()=>void savePrivacy('NICKNAME')}><b>展示昵称</b><small>仅展示昵称，不自动公开头像</small></button></div>{profileError&&<p className={styles.profileInlineError}>{profileError}</p>}<article><b>好好值奖励什么？</b><p>它记录的是认真完成的过程，不是花了多少钱。具体规则可以在“成长明细”里查看。</p></article></div>}
-      {panel==='GROWTH'&&<div className={styles.growthLedger}><section><small>LV.{growth.level} · {growth.name}</small><b>{points}<em> 好好值</em></b><div className={styles.growthProgress}><i style={{width:`${progress}%`}}/></div><p>{growth.next?`再获得 ${growth.next-points} 好好值进入下一级`:'当前已达到最高等级'}</p></section><p>它记录“想清楚—行动—回看”的过程。写下好体验或坏体验得到的分值相同，消费金额也不会改变分数。</p><div className={styles.growthRules}><article><b>+20</b><span>为一个心愿写下决定理由，每个心愿一次</span></article><article><b>+15</b><span>首次回看一件已有物品，后续记录不重复加分</span></article><article><b>+10</b><span>完善昵称和个人简介，每个账户一次</span></article><article><b>+10</b><span>认领一份有效朋友回信，每天最多 3 次</span></article><small>邀请人数、连续登录、消费金额、体验好坏和是否跟随多数意见都不加分。</small></div><div>{displayGrowthEntries.map(entry=><article key={entry.id}><span><b>{entry.title}</b><small>{new Date(entry.date).toLocaleDateString('zh-CN')}{entry.limited?' · 已达当日上限':''}</small></span><strong>{entry.points>0?'+':''}{entry.points}</strong></article>)}</div>{!displayGrowthEntries.length&&<p className={styles.emptyState}>还没有成长记录。</p>}</div>}
+      {panel==='GROWTH'&&<div className={styles.growthLedger}><section><small>LV.{growth.level} · {growth.name}</small><b>{points}<em> 好好值</em></b><div className={styles.growthProgress}><i style={{width:`${progress}%`}}/></div><p>{growth.next?`再获得 ${growth.next-points} 好好值进入下一级`:'当前已达到最高等级'}</p></section><p>它记录“想清楚—行动—回看”的过程。写下好体验或坏体验得到的分值相同，消费金额也不会改变分数。</p><div className={styles.growthSection}><b>好好花「积分等级会员体系」</b><div className={styles.growthTable}><div className={`${styles.growthTableRow} ${styles.growthTableHead}`}><span>等级</span><span>会员名称</span><span>所需累计积分</span><span>用户定位</span></div>{MEMBERSHIP_LEVELS.map(level=><div className={styles.growthTableRow} key={level.level}><span className={styles.growthTableLevel}>{level.level}</span><span className={styles.growthTableName}>{level.name}</span><span>{level.points}</span><span className={styles.growthTableRole}>{level.role}</span></div>)}</div></div><div className={styles.growthSection}><b>好好花积分</b><div className={`${styles.growthTable} ${styles.growthTokenTable}`}><div className={`${styles.growthTableRow} ${styles.growthTableHead}`}><span>用户行为</span><span>积分</span><span>对应 Token</span></div>{POINT_RULES.map(rule=><div className={styles.growthTableRow} key={rule.action}><span>{rule.action}</span><strong>{rule.points}</strong><span>{rule.token}</span></div>)}</div></div><div>{displayGrowthEntries.map(entry=><article key={entry.id}><span><b>{entry.title}</b><small>{new Date(entry.date).toLocaleDateString('zh-CN')}{entry.limited?' · 已达当日上限':''}</small></span><strong>{entry.points>0?'+':''}{entry.points}</strong></article>)}</div>{!displayGrowthEntries.length&&<p className={styles.emptyState}>还没有成长记录。</p>}</div>}
     </section></div>}
   </section>;
 }
@@ -259,6 +282,22 @@ export function SavingsView({data,onBack,onAddSaving}:{data:AppData;onBack:()=>v
   return <section className={styles.subPage}><PageHeader title="存钱目标" onBack={onBack}/><section className={styles.savingsSummary}><small>SAVING GOALS</small><b>¥{saved.toLocaleString()}<em> / ¥{total.toLocaleString()}</em></b><p>{data.savingGoals.length?`${data.savingGoals.length} 个目标正在准备中`:'当前没有进行中的存钱目标'}</p></section><div className={styles.savingsList}>{data.savingGoals.map(goal=><article key={goal.id}><SavingControl goal={goal} onAdd={amount=>onAddSaving(goal.id,amount)}/></article>)}</div>{!data.savingGoals.length&&<p className={styles.emptyState}>选择“先存钱”后，对应目标会出现在这里。</p>}</section>;
 }
 
+const MEMBERSHIP_LEVELS:Array<{level:string;name:string;points:string;role:string}>=[
+  { level:'Lv.1', name:'青铜会员', points:'0 ~ 99', role:'新用户' },
+  { level:'Lv.2', name:'白银会员', points:'100 ~ 299', role:'初步活跃' },
+  { level:'Lv.3', name:'黄金会员', points:'300 ~ 699', role:'核心用户' },
+  { level:'Lv.4', name:'铂金会员', points:'700 ~ 1,499', role:'高价值用户' },
+  { level:'Lv.5', name:'钻石会员', points:'≥ 1,500', role:'核心贡献用户' },
+];
+const POINT_RULES:Array<{action:string;points:string;token:string}>=[
+  { action:'每日登录', points:'+3', token:'2,700 Token' },
+  { action:'连续登录 7 天', points:'+21', token:'18,900 Token' },
+  { action:'邀请新用户', points:'+8', token:'7,200 Token' },
+  { action:'有效分享', points:'+2', token:'1,800 Token' },
+  { action:'完成有效回答/回信', points:'+3', token:'2,700 Token' },
+  { action:'上传一次消费记录', points:'+10', token:'9,000 Token' },
+  { action:'完成一次心愿/决策', points:'+40', token:'36,000 Token' },
+];
 const assetTypeOptions:Array<{value:Asset['type'];label:string}>=[
   {value:'ITEM',label:'高价值实物'},
   {value:'EXPERIENCE',label:'一次性体验 / 消耗品'},
@@ -479,22 +518,26 @@ function InvitePanel({request,invites,busy,onInvite,onCopyInvite}:{request:Purch
   </section>;
 }
 
-export function WishRoom({data,request,busy,message,onBack,onInvite,onCopyInvite,onDecide,onAddSaving,onDecisionNote,onEdit}:{data:AppData;request:PurchaseRequest;busy:string;message:string;onBack:()=>void;onInvite:()=>void;onCopyInvite:(invite:ReviewInvite)=>Promise<void>;onDecide:(choice:ReviewChoice)=>void;onAddSaving:(goalId:string,amount:number)=>Promise<void>;onDecisionNote:(note:string)=>void;onEdit?:()=>void}){
+export function WishRoom({data,request,busy,message,onBack,onInvite,onCopyInvite,onDecide,onAddSaving,onDecisionNote,onEdit}:{data:AppData;request:PurchaseRequest;busy:string;message:string;onBack:()=>void;onInvite:()=>void;onCopyInvite:(invite:ReviewInvite)=>Promise<void>;onDecide:(choice:ReviewChoice,noteOverride?:string)=>void;onAddSaving:(goalId:string,amount:number)=>Promise<void>;onDecisionNote:(note:string)=>void;onEdit?:()=>void}){
   const reviews=data.reviews.filter(review=>review.request_id===request.id);const decision=data.decisions.find(item=>item.request_id===request.id);const goal=data.savingGoals.find(item=>item.request_id===request.id);const active=request.status==='REVIEWING';
   const [note,setNote]=useState(request.decision_note||'');
+  const multiOptions=isMultiProductWish(request)?parseMultiProductOptions(request):[];
+  const isMulti=multiOptions.length>0;
   const images=request.images??[];const [imgIndex,setImgIndex]=useState(0);const clampIndex=(n:number)=>Math.max(0,Math.min(n,Math.max(0,images.length-1)));
   const carousel=(<div className={styles.detailImage}>{images.length===0?<span className={styles.detailPlaceholder}><Icon name="wish" size={48}/></span>:<><img src={images[clampIndex(imgIndex)].url} alt={request.name}/>{images.length>1&&<><button className={styles.carouselPrev} onClick={()=>setImgIndex(i=>clampIndex(i-1))} aria-label="上一张"><Icon name="back" size={20}/></button><button className={styles.carouselNext} onClick={()=>setImgIndex(i=>clampIndex(i+1))} aria-label="下一张"><Icon name="chevron" size={20}/></button><span className={styles.carouselDots}>{clampIndex(imgIndex)+1} / {images.length}</span></>}</>}</div>);
   return <section className={styles.subPage}><PageHeader title={active?'心愿详情':'决定详情'} onBack={onBack}/>
     <article className={styles.detailHero}>{carousel}
-      <span>{typeToCategory(request.type) ?? request.category ?? ''} · {statusCopy(request)}</span>
-      <div className={styles.detailTitle}><div><h2>{request.name}</h2><b>¥{request.price.toLocaleString()}</b></div>{active&&onEdit&&<button className={styles.editEntry} onClick={onEdit}>编辑心愿</button>}</div>
+      <span>{isMulti?'多商品选择':typeToCategory(request.type) ?? request.category ?? ''} · {statusCopy(request)}</span>
+      <div className={styles.detailTitle}><div><h2>{request.name}</h2>{!isMulti&&<b>¥{request.price.toLocaleString()}</b>}</div>{active&&onEdit&&<button className={styles.editEntry} onClick={onEdit}>编辑心愿</button>}</div>
       <blockquote>{request.reason}</blockquote>
-      <div className={styles.factChips}><span>计划：{request.usageFrequency||request.usage_frequency||'待确认'}</span><span>担心：{request.concern||request.similar_item||'待补充'}</span></div>
-      <details className={styles.detailFold}><summary>详情</summary><div className={styles.detailFoldGrid}><span>品牌：{request.brand||'—'}</span><span>规格：{request.skuLabel||'—'}</span><span>来源：{request.sourcePlatform||'—'}</span>{request.details&&<p>{request.details}</p>}{(request.productUrl||request.product_url)&&<a href={request.productUrl||request.product_url||''} target="_blank" rel="noreferrer">查看原商品 <Icon name="external" size={14}/></a>}</div></details>
-      {request.product_url&&!request.productUrl&&<a href={request.product_url} target="_blank" rel="noreferrer">查看原商品 <Icon name="external" size={16}/></a>}{!request.product_url&&!request.productUrl&&<p className={styles.missingLink}>未保存商品链接</p>}
+      {isMulti?<div className={styles.multiDetailGrid}>{multiOptions.map(option=><article key={option.label}><span><b>{option.name || `${option.label} 商品`}</b>{option.brand&&<small>{option.brand}</small>}</span>{option.price!==null&&<small>¥{option.price.toLocaleString()}</small>}</article>)}</div>:<>
+        <div className={styles.factChips}><span>计划：{request.usageFrequency||request.usage_frequency||'待确认'}</span><span>担心：{request.concern||request.similar_item||'待补充'}</span></div>
+        <details className={styles.detailFold}><summary>详情</summary><div className={styles.detailFoldGrid}><span>品牌：{request.brand||'—'}</span><span>规格：{request.skuLabel||'—'}</span><span>来源：{request.sourcePlatform||'—'}</span>{request.details&&<p>{request.details}</p>}{(request.productUrl||request.product_url)&&<a href={request.productUrl||request.product_url||''} target="_blank" rel="noreferrer">查看原商品 <Icon name="external" size={14}/></a>}</div></details>
+        {request.product_url&&!request.productUrl&&<a href={request.product_url} target="_blank" rel="noreferrer">查看原商品 <Icon name="external" size={16}/></a>}{!request.product_url&&!request.productUrl&&<p className={styles.missingLink}>未保存商品链接</p>}
+      </>}
     </article>
     {active?<><InvitePanel request={request} invites={data.invites??[]} busy={busy} onInvite={onInvite} onCopyInvite={onCopyInvite}/><FeedbackPanel reviews={reviews} currentRevision={request.revision??1} onInvite={onInvite}/>
-      <AgentPanel requestId={request.id} revision={request.revision??1} />
+      <AgentPanel request={request} revision={request.revision??1} />
       <section className={styles.finalDecision}><small>最后一步</small><h2>听完不同视角，<br/>由你完成决定。</h2><textarea value={note} onChange={event=>{setNote(event.target.value);onDecisionNote(event.target.value)}} placeholder="写下为什么这样决定，留给之后的自己"/><div><button disabled={Boolean(busy)} onClick={()=>onDecide('BUY_NOW')}>现在购买</button><button disabled={Boolean(busy)} onClick={()=>onDecide('SAVE_FIRST')}>先存钱</button><button disabled={Boolean(busy)} onClick={()=>onDecide('WAIT')}>再等等</button></div></section>
     </>:<><section className={styles.timeline}><h2>决定时间线</h2><article className={styles.blueSurface}><small>01 · 心愿事实</small><b>{request.reason}</b></article><article className={styles.pinkSurface}><small>02 · 朋友视角</small><b>{reviews.length?`${reviews.length} 条回信已保存`:'当时没有真人回信'}</b>{reviews.map(review=><p key={review.id}>{review.reviewer_name}：{review.comment}</p>)}</article><article className={decision?.decision==='SAVE_FIRST'?styles.greenSurface:styles.yellowSurface}><small>03 · 最终决定</small><b>{decision?decisionCopy(decision.decision):statusCopy(request)}</b><p>{request.decision_note||'当时没有补充决定理由。'}</p><time>{decision?new Date(decision.decided_at).toLocaleString('zh-CN'):'时间未记录'}</time></article></section>{goal&&<SavingControl goal={goal} onAdd={amount=>onAddSaving(goal.id,amount)}/>}</>}{message&&<p className={styles.toast} role="status">{message}</p>}</section>;
 }

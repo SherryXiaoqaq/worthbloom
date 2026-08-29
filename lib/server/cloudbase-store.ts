@@ -31,6 +31,8 @@ const collections = {
 } as const;
 const now = () => new Date().toISOString();
 const today = () => new Date().toISOString().slice(0, 10);
+// 服务器本地时区（演示环境为北京时间）的日历日期，用于每日登录判断
+const calendarDateKey = (offsetDays = 0) => { const d = new Date(); d.setDate(d.getDate() - offsetDays); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const inviteToken = () => crypto.randomUUID().replaceAll('-', '').slice(0, 20);
 
 export class CloudBaseStoreError extends Error {
@@ -74,15 +76,16 @@ async function saveDocument(collection: string, id: string, data: Record<string,
   await getCloudBaseDb().collection(collection).doc(id).set({ ...data, id });
 }
 
-function levelForPoints(points: number): 1 | 2 | 3 | 4 {
+function levelForPoints(points: number): 1 | 2 | 3 | 4 | 5 {
+  if (points >= 1500) return 5;
   if (points >= 700) return 4;
   if (points >= 300) return 3;
   if (points >= 100) return 2;
   return 1;
 }
 
-function nextLevelPoints(level: 1 | 2 | 3 | 4) {
-  return level === 1 ? 100 : level === 2 ? 300 : level === 3 ? 700 : undefined;
+function nextLevelPoints(level: 1 | 2 | 3 | 4 | 5) {
+  return level === 1 ? 100 : level === 2 ? 300 : level === 3 ? 700 : level === 4 ? 1500 : undefined;
 }
 
 function profileFromDocument(ownerId: string, document: CloudDocument | undefined, fallbackNickname?: string | null): UserProfile {
@@ -145,7 +148,6 @@ export async function saveCloudBaseProfile(ownerId: string, patch: Partial<UserP
     created_at: createdAt,
     updated_at: updatedAt,
   });
-  if (nickname && bio) await awardCloudBaseGrowth(ownerId, 'profile_completed', ownerId, 10);
   return { ...current, nickname, bio, shareIdentityDefault, updatedAt };
 }
 
@@ -166,7 +168,7 @@ export async function saveCloudBaseShoppingProfile(ownerId:string,items:Shopping
   const categoryCounts=items.reduce<Record<string,number>>((counts,item)=>{counts[item.category]=(counts[item.category]??0)+1;return counts},{});
   const profile:ShoppingProfile={userId:ownerId,source:'REGISTER_SCREENSHOTS',consentedAt:timestamp,items,categoryCounts,updatedAt:timestamp};
   await saveDocument(collections.shoppingProfiles,ownerId,{owner_id:ownerId,user_id:ownerId,source:profile.source,consented_at:timestamp,items,category_counts:categoryCounts,updated_at:timestamp});
-  await awardCloudBaseGrowth(ownerId,'shopping_profile_import',ownerId,20);
+  await awardCloudBaseGrowth(ownerId,'consumption_upload',crypto.randomUUID(),10);
   return profile;
 }
 
@@ -188,15 +190,30 @@ export async function saveCloudBaseAvatar(ownerId: string, avatarUrl: string | n
   return { ...current, avatarUrl: avatarUrl || undefined, updatedAt };
 }
 
-export async function loadCloudBaseGrowth(ownerId: string) {
-  const [accountDocument, ledgerDocuments] = await Promise.all([
-    getCloudBaseDb().collection(collections.growth).doc(ownerId).get(),
-    getCloudBaseDb().collection(collections.growthLedger).where({ user_id: ownerId }).limit(100).get(),
-  ]);
-  const rawAccount = accountDocument.data?.[0] as CloudDocument | undefined;
+function growthAccountFromDocument(ownerId: string, rawAccount: CloudDocument | undefined): GrowthAccount {
   const points = Number(rawAccount?.points ?? 0);
   const level = levelForPoints(points);
-  const account: GrowthAccount = { userId: ownerId, points, level, nextLevelPoints: nextLevelPoints(level), updatedAt: rawAccount?.updated_at ? String(rawAccount.updated_at) : undefined };
+  return { userId: ownerId, points, level, nextLevelPoints: nextLevelPoints(level), updatedAt: rawAccount?.updated_at ? String(rawAccount.updated_at) : undefined };
+}
+
+export async function loadCloudBaseGrowth(ownerId: string) {
+  const db = getCloudBaseDb();
+  const [accountDocument, ledgerDocuments] = await Promise.all([
+    db.collection(collections.growth).doc(ownerId).get(),
+    db.collection(collections.growthLedger).where({ user_id: ownerId }).limit(100).get(),
+  ]);
+  let rawAccount = accountDocument.data?.[0] as CloudDocument | undefined;
+  // 每日登录 +3；连续第 7 天额外 +21（每 7 天一个周期）。打开 App 拉取成长数据即触发，同天幂等。
+  const todayKey = calendarDateKey();
+  const lastLogin = String(rawAccount?.last_login_date ?? '');
+  if (lastLogin !== todayKey) {
+    const streak = lastLogin === calendarDateKey(1) ? Number(rawAccount?.login_streak ?? 0) + 1 : 1;
+    await awardCloudBaseGrowth(ownerId, 'daily_login', todayKey, 3);
+    if (streak % 7 === 0) await awardCloudBaseGrowth(ownerId, 'login_streak', todayKey, 21);
+    await db.collection(collections.growth).doc(ownerId).update({ last_login_date: todayKey, login_streak: streak });
+    rawAccount = (await db.collection(collections.growth).doc(ownerId).get()).data?.[0] as CloudDocument | undefined;
+  }
+  const account = growthAccountFromDocument(ownerId, rawAccount);
   const entries: GrowthLedgerEntry[] = newestFirst((ledgerDocuments.data || []) as CloudDocument[]).map(document => ({
     id: String(document.id || document._id || ''),
     userId: ownerId,
@@ -378,7 +395,6 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
       const images = (payload.images as Array<Record<string, unknown>>).slice(0, 6).map((img, index) => ({ id: String(img.id ?? crypto.randomUUID()), url: String(img.url ?? ''), sortOrder: Number(img.sortOrder ?? index), isCover: Boolean(img.isCover) }));
       if (images.length && !images.some(img => img.isCover)) images[0].isCover = true;
       patch.images = images;
-      await saveDocument(collections.wishImages, `${requestId}-images`, { owner_id: ownerId, request_id: requestId, images, updated_at: now() });
     }
     const nextName=String(patch.name??request.name??'').trim();
     const nextReason=String(patch.reason??request.reason??'').trim();
@@ -390,6 +406,8 @@ export async function handleCloudBaseDataAction(ownerId: string, body: ActionBod
     if(!Number.isFinite(nextPrice)||nextPrice<0||nextPrice>99_999_999.99)throw new CloudBaseStoreError('请填写有效价格',400,'price');
     if(!nextConcern)throw new CloudBaseStoreError('请填写或选择你最担心的问题',400,'concern');
     if(!isKnownWishType(nextType))throw new CloudBaseStoreError('请选择类型',400,'type');
+    // 校验全部通过后再写图片，避免校验失败留下半提交状态
+    if (Array.isArray(patch.images)) await saveDocument(collections.wishImages, `${requestId}-images`, { owner_id: ownerId, request_id: requestId, images: patch.images, updated_at: now() });
     patch.revision = currentRev + 1;
     patch.updatedAt = now();
     patch.similar_item = patch.concern ?? request.similar_item;
@@ -593,6 +611,8 @@ export async function getCloudBaseReview(token: string) {
     skuLabel: normalized.skuLabel, details: normalized.details, sourcePlatform: normalized.sourcePlatform,
     productUrl: normalized.productUrl, images: normalized.images, revision: normalized.revision,
   };
+  // 规则④：朋友打开邀请链接（每个链接首次）→ 主人「有效分享 +2」
+  await awardCloudBaseGrowth(String(invite.owner_id), 'effective_share', String(invite.token ?? invite.id), 2);
   return { request: requestSubset, ownerDisplay: null as null, linkState: 'ACTIVE' as const };
 }
 
@@ -642,5 +662,7 @@ export async function submitCloudBaseReview(body: { token?: string; reviewerName
     status: 'PENDING',
     created_at: usedAt,
   });
+  // 规则③：朋友成功提交一封有效回信 → 主人「邀请新用户 +8」
+  await awardCloudBaseGrowth(String(invite.owner_id), 'invite_friend', reviewId, 8);
   return { reviewId, claimToken, successText: '感谢你的真实视角，已送到朋友手里。' };
 }

@@ -64,12 +64,14 @@ const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS agent_sessions (
     id TEXT PRIMARY KEY, request_id TEXT NOT NULL, request_revision INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'IN_PROGRESS', question_count INTEGER NOT NULL DEFAULT 0,
+    mode TEXT NOT NULL DEFAULT 'SINGLE', agent_profile_id TEXT NOT NULL DEFAULT 'QUICK_DECISION',
+    prompt_version TEXT NOT NULL DEFAULT 'prompt_v1', summary TEXT, metadata_json TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(request_id) REFERENCES purchase_requests(id) ON DELETE CASCADE
   )`,
   `CREATE TABLE IF NOT EXISTS agent_messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL,
-    question_id TEXT, skipped INTEGER NOT NULL DEFAULT 0,
+    question_id TEXT, skipped INTEGER NOT NULL DEFAULT 0, agent_profile_id TEXT, payload_json TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE
   )`,
@@ -98,6 +100,7 @@ const schemaStatements = [
   `CREATE INDEX IF NOT EXISTS idx_asset_reflections_asset_id ON asset_reflections(asset_id)`,
   `CREATE INDEX IF NOT EXISTS idx_wish_images_request_id ON wish_images(request_id)`,
   `CREATE INDEX IF NOT EXISTS idx_agent_sessions_request_id ON agent_sessions(request_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_sessions_request_updated ON agent_sessions(request_id,updated_at)`,
   `CREATE INDEX IF NOT EXISTS idx_agent_messages_session_id ON agent_messages(session_id)`,
   `CREATE INDEX IF NOT EXISTS idx_growth_ledger_user ON growth_ledger_entries(user_id)`,
   `CREATE INDEX IF NOT EXISTS idx_claim_tokens_review_id ON claim_tokens(review_id)`,
@@ -149,6 +152,18 @@ const assetMigrations: Array<[string, string]> = [
   ['archived_at', 'ALTER TABLE assets ADD COLUMN archived_at TEXT'],
 ];
 
+const agentSessionMigrations: Array<[string,string]> = [
+  ['mode', "ALTER TABLE agent_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'SINGLE'"],
+  ['agent_profile_id', "ALTER TABLE agent_sessions ADD COLUMN agent_profile_id TEXT NOT NULL DEFAULT 'QUICK_DECISION'"],
+  ['prompt_version', "ALTER TABLE agent_sessions ADD COLUMN prompt_version TEXT NOT NULL DEFAULT 'prompt_v1'"],
+  ['summary', 'ALTER TABLE agent_sessions ADD COLUMN summary TEXT'],
+  ['metadata_json', 'ALTER TABLE agent_sessions ADD COLUMN metadata_json TEXT'],
+];
+
+const agentMessageMigrations: Array<[string,string]> = [
+  ['agent_profile_id', 'ALTER TABLE agent_messages ADD COLUMN agent_profile_id TEXT'],
+  ['payload_json', 'ALTER TABLE agent_messages ADD COLUMN payload_json TEXT'],
+];
 const legacyFeelingSql = `CASE
   WHEN rating >= 5 THEN 'BECAME_PART_OF_LIFE'
   WHEN rating >= 3 THEN 'SOMETIMES_USEFUL'
@@ -207,6 +222,13 @@ export async function ensureSchema(db: D1Database) {
   for(const [column,sql] of assetMigrations) {
     if(!assetHave.has(column))await db.prepare(sql).run();
   }
+  const agentSessionColumns=await db.prepare(`PRAGMA table_info(agent_sessions)`).all<{name:string}>();
+  const agentSessionHave=new Set(agentSessionColumns.results.map(column=>column.name));
+  for(const [column,sql] of agentSessionMigrations)if(!agentSessionHave.has(column))await db.prepare(sql).run();
+  const agentMessageColumns=await db.prepare(`PRAGMA table_info(agent_messages)`).all<{name:string}>();
+  const agentMessageHave=new Set(agentMessageColumns.results.map(column=>column.name));
+  for(const [column,sql] of agentMessageMigrations)if(!agentMessageHave.has(column))await db.prepare(sql).run();
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_agent_sessions_request_updated ON agent_sessions(request_id,updated_at)`).run();
   await ensureAssetReflectionSchema(db);
   await db.batch(seedStatements.map(sql => db.prepare(sql)));
 }

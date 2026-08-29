@@ -13,7 +13,8 @@ function fail(error: string, status: number, code?: string) {
   return Response.json({ error, code }, { status });
 }
 
-function levelForPoints(points: number): 1 | 2 | 3 | 4 {
+function levelForPoints(points: number): 1 | 2 | 3 | 4 | 5 {
+  if (points >= 1500) return 5;
   if (points >= 700) return 4;
   if (points >= 300) return 3;
   if (points >= 100) return 2;
@@ -54,7 +55,6 @@ export async function POST(request: Request) {
       const reviewDoc = (await db.collection('reviews').doc(body.reviewId).get()).data?.[0] as Record<string, unknown> | undefined;
       if (reviewDoc && String(reviewDoc.owner_id) === userId) return fail('心愿主人不能认领自己的回信', 403, 'CLAIM_OWNER_FORBIDDEN');
 
-      const todayStr = new Date().toISOString().slice(0, 10);
       const todayEntries = (await db.collection('growth_ledger').where({ user_id: userId }).get()).data as Record<string, unknown>[] || [];
       const idempotencyKey = `claim:${body.reviewId}`;
       const existing = todayEntries.find(e => String(e.idempotency_key) === idempotencyKey);
@@ -77,10 +77,7 @@ export async function POST(request: Request) {
         return fail('认领凭据已过期', 410, 'CLAIM_EXPIRED');
       }
 
-      const todayCount = todayEntries.filter(entry =>
-        entry.reason === 'review_claim' && Number(entry.points ?? 0) > 0 && String(entry.created_at || '').startsWith(todayStr)
-      ).length;
-      const pointsAwarded = todayCount >= 3 ? 0 : 10;
+      const pointsAwarded = 3;
       const claimed = await db.collection('claim_tokens').where({ _id: claimId, status: 'PENDING' }).update({
         status: 'CLAIMED',
         claimed_by: userId,
@@ -97,14 +94,14 @@ export async function POST(request: Request) {
         user_id: userId,
         action_type: 'review_claim',
         points: pointsAwarded,
-        limited: todayCount >= 3,
+        limited: false,
         idempotency_key: idempotencyKey,
         reason: 'review_claim',
         reference_id: body.reviewId,
         created_at: new Date().toISOString(),
       });
       await db.collection('reviews').doc(body.reviewId).update({ claimed_by: userId, claimed_at: new Date().toISOString() });
-      return Response.json({ claimed: true, pointsAwarded, dailyLimitReached: todayCount >= 3, growthAccount: { userId, points: newPoints, level } });
+      return Response.json({ claimed: true, pointsAwarded, dailyLimitReached: false, growthAccount: { userId, points: newPoints, level } });
     }
 
     // D1 path
@@ -121,9 +118,7 @@ export async function POST(request: Request) {
     if (claim.status === 'CLAIMED') return fail('认领凭据已经使用', 410, 'CLAIM_ALREADY_USED');
     if (new Date(claim.expires_at).getTime() < Date.now()) return fail('认领凭据已过期', 410, 'CLAIM_EXPIRED');
 
-    const today = new Date().toISOString().slice(0, 10);
-    const daily = await db.prepare(`SELECT COUNT(*) AS count FROM growth_ledger_entries WHERE user_id = ? AND reason = 'review_claim' AND points > 0 AND substr(created_at, 1, 10) = ?`).bind(userId, today).first<{ count: number }>();
-    const pointsAwarded = Number(daily?.count ?? 0) >= 3 ? 0 : 10;
+    const pointsAwarded = 3;
     const currentAccount = await db.prepare(`SELECT points FROM growth_accounts WHERE user_id = ?`).bind(userId).first<{ points: number }>();
     const newPoints = Number(currentAccount?.points ?? 0) + pointsAwarded;
     const level = levelForPoints(newPoints);
@@ -133,7 +128,7 @@ export async function POST(request: Request) {
       db.prepare(`INSERT INTO growth_ledger_entries (id, user_id, points, idempotency_key, reason) VALUES (?,?,?,?,?)`).bind(crypto.randomUUID(), userId, pointsAwarded, idempotencyKey, 'review_claim'),
       db.prepare(`UPDATE reviews SET claimed_by = ?, claimed_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(userId, body.reviewId),
     ]);
-    return Response.json({ claimed: true, pointsAwarded, dailyLimitReached: pointsAwarded === 0, growthAccount: { userId, points: newPoints, level } });
+    return Response.json({ claimed: true, pointsAwarded, dailyLimitReached: false, growthAccount: { userId, points: newPoints, level } });
   } catch (error) {
     const status = error instanceof LocalStoreError || error instanceof CloudBaseStoreError || error instanceof CloudBaseAuthError ? error.status : 500;
     const code = error instanceof CloudBaseAuthError ? 'AUTH_REQUIRED' : error instanceof LocalStoreError ? error.code : error instanceof CloudBaseStoreError ? (error as { code?: string }).code : undefined;

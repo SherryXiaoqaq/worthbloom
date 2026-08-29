@@ -2,6 +2,8 @@ import type { AppData, Asset, AssetReflection, Decision, GrowthAccount, GrowthLe
 import { applyAssetUsage, assetTypeForRequest, AssetRuleError, costPerUse, normalizeAssetReflection, parseAssetPayload, parseAssetReflectionPayload } from '@/lib/asset-rules';
 import { isLocalPreviewHostname } from '@/lib/server/network';
 import { canonicalWishType, isKnownWishType, normalizeDecision, normalizeSavingGoal, normalizeWish, normalizeReview, typeToCategory } from '@/lib/wish-compat';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 
 declare global {
   var __worthBloomLocalStore: AppData | undefined;
@@ -12,7 +14,51 @@ declare global {
   var __worthBloomLocalInboxReads: Record<string, string[]> | undefined;
   var __worthBloomDeviceFocus: Record<string, string | null> | undefined;
   var __worthBloomShoppingProfiles: Record<string, ShoppingProfile> | undefined;
+  var __worthBloomLocalLoginStreaks: Record<string, { streak: number; lastLoginDate: string }> | undefined;
 }
+
+// ——— 本地演示模式持久化：状态防抖写入磁盘，重启 dev server 后自动恢复，不再丢数据 ———
+const LOCAL_STATE_FILE = process.env.WORTHBLOOM_LOCAL_STATE_FILE || path.join(process.cwd(), '.worthbloom-local-state.json');
+let persistedLoaded = false;
+function ensurePersistedLoaded() {
+  if (persistedLoaded) return;
+  persistedLoaded = true;
+  try {
+    if (!existsSync(LOCAL_STATE_FILE)) return;
+    const parsed = JSON.parse(readFileSync(LOCAL_STATE_FILE, 'utf-8')) as Record<string, unknown>;
+    const g = globalThis as Record<string, unknown>;
+    for (const key of Object.keys(parsed)) {
+      if (!key.startsWith('__worthBloom') || g[key] !== undefined) continue;
+      if (key === '__worthBloomDeviceEvents' && Array.isArray(parsed[key])) g[key] = new Set(parsed[key] as string[]);
+      else g[key] = parsed[key];
+    }
+  } catch (error) {
+    console.error('[worthbloom-local] 读取本地状态失败：', error);
+  }
+}
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+function persistLocalState() {
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    try {
+      const g = globalThis as Record<string, unknown>;
+      const snapshot: Record<string, unknown> = {};
+      for (const key of Object.keys(g)) {
+        if (!key.startsWith('__worthBloom')) continue;
+        snapshot[key] = key === '__worthBloomDeviceEvents' && g[key] instanceof Set ? [...(g[key] as Set<string>)] : g[key];
+      }
+      mkdirSync(path.dirname(LOCAL_STATE_FILE), { recursive: true });
+      writeFileSync(LOCAL_STATE_FILE, JSON.stringify(snapshot), 'utf-8');
+    } catch (error) {
+      console.error('[worthbloom-local] 保存本地状态失败：', error);
+    }
+  }, 300);
+}
+function clearPersistedFile() {
+  try { if (existsSync(LOCAL_STATE_FILE)) rmSync(LOCAL_STATE_FILE); } catch (error) { console.error('[worthbloom-local] 删除本地状态失败：', error); }
+}
+ensurePersistedLoaded();
 
 export class LocalStoreError extends Error {
   code?: string;
@@ -73,18 +119,20 @@ function repairLegacyLocalState(data: AppData) {
 
 function store() {
   globalThis.__worthBloomLocalStore ??= seed();
+  persistLocalState();
   return repairLegacyLocalState(globalThis.__worthBloomLocalStore);
 }
 
-function levelForPoints(points:number):1|2|3|4{return points>=700?4:points>=300?3:points>=100?2:1}
-function nextLevelPoints(level:1|2|3|4){return level===1?100:level===2?300:level===3?700:undefined}
+function levelForPoints(points:number):1|2|3|4|5{return points>=1500?5:points>=700?4:points>=300?3:points>=100?2:1}
+function nextLevelPoints(level:1|2|3|4|5){return level===1?100:level===2?300:level===3?700:level===4?1500:undefined}
 function defaultLocalProfile(userId:string,fallbackNickname?:string|null):UserProfile{const timestamp=now();return{userId,nickname:fallbackNickname||'好好花用户',bio:'把每一次认真思考，留给未来的自己。',shareIdentityDefault:'ANONYMOUS',createdAt:timestamp,updatedAt:timestamp}}
-function localProfiles(){globalThis.__worthBloomLocalProfiles??={};return globalThis.__worthBloomLocalProfiles}
-function localGrowthAccounts(){globalThis.__worthBloomLocalGrowthAccounts??={};return globalThis.__worthBloomLocalGrowthAccounts}
-function localGrowthLedger(){globalThis.__worthBloomLocalGrowthLedger??={};return globalThis.__worthBloomLocalGrowthLedger}
-function localInboxReads(){globalThis.__worthBloomLocalInboxReads??={};return globalThis.__worthBloomLocalInboxReads}
-function localDeviceFocus(){globalThis.__worthBloomDeviceFocus??={};return globalThis.__worthBloomDeviceFocus}
-function localShoppingProfiles(){globalThis.__worthBloomShoppingProfiles??={};return globalThis.__worthBloomShoppingProfiles}
+function localProfiles(){globalThis.__worthBloomLocalProfiles??={};persistLocalState();return globalThis.__worthBloomLocalProfiles}
+function localGrowthAccounts(){globalThis.__worthBloomLocalGrowthAccounts??={};persistLocalState();return globalThis.__worthBloomLocalGrowthAccounts}
+function localGrowthLedger(){globalThis.__worthBloomLocalGrowthLedger??={};persistLocalState();return globalThis.__worthBloomLocalGrowthLedger}
+function localInboxReads(){globalThis.__worthBloomLocalInboxReads??={};persistLocalState();return globalThis.__worthBloomLocalInboxReads}
+function localDeviceFocus(){globalThis.__worthBloomDeviceFocus??={};persistLocalState();return globalThis.__worthBloomDeviceFocus}
+function localShoppingProfiles(){globalThis.__worthBloomShoppingProfiles??={};persistLocalState();return globalThis.__worthBloomShoppingProfiles}
+function localLoginStreaks(){globalThis.__worthBloomLocalLoginStreaks??={};persistLocalState();return globalThis.__worthBloomLocalLoginStreaks}
 
 function awardLocalGrowth(userId:string,actionType:string,referenceId:string,delta:number){
   const ledger=localGrowthLedger();const entries=ledger[userId]??[];const idempotencyKey=`${actionType}:${referenceId}`;
@@ -94,12 +142,27 @@ function awardLocalGrowth(userId:string,actionType:string,referenceId:string,del
   ledger[userId]=[{id:crypto.randomUUID(),userId,actionType,referenceId,delta,idempotencyKey,limited:false,createdAt:timestamp},...entries];
 }
 
+// 服务器本地时区（演示环境为北京时间）的日历日期，用于每日登录判断
+function localDateKey(offsetDays=0){const d=new Date();d.setDate(d.getDate()-offsetDays);const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const day=String(d.getDate()).padStart(2,'0');return`${y}-${m}-${day}`}
+
+// 规则①：每日登录 +3；连续登录第 7 天额外 +21（每 7 天一个周期）。
+// 由 App 打开时 GET /api/growth 触发，同一天幂等。
+export function touchLocalDailyLogin(userId:string){
+  const todayKey=localDateKey();
+  const streaks=localLoginStreaks();const current=streaks[userId]??{streak:0,lastLoginDate:''};
+  if(current.lastLoginDate===todayKey)return;
+  const streak=current.lastLoginDate===localDateKey(1)?current.streak+1:1;
+  streaks[userId]={streak,lastLoginDate:todayKey};
+  awardLocalGrowth(userId,'daily_login',todayKey,3);
+  if(streak%7===0)awardLocalGrowth(userId,'login_streak',todayKey,21);
+}
+
 export function getLocalProfile(userId:string,fallbackNickname?:string|null){return structuredClone(localProfiles()[userId]??defaultLocalProfile(userId,fallbackNickname))}
 export function saveLocalProfile(userId:string,patch:Partial<UserProfile>,fallbackNickname?:string|null){
   const current=localProfiles()[userId]??defaultLocalProfile(userId,fallbackNickname);const nickname=patch.nickname===undefined?current.nickname:String(patch.nickname).trim().slice(0,20);if(!nickname)throw new LocalStoreError('请填写昵称',400,'nickname');
   const shareIdentityDefault=patch.shareIdentityDefault??current.shareIdentityDefault;if(!['ANONYMOUS','NICKNAME'].includes(shareIdentityDefault))throw new LocalStoreError('分享身份设置无效',400,'shareIdentityDefault');
   const profile:UserProfile={...current,nickname,bio:patch.bio===undefined?current.bio:String(patch.bio).trim().slice(0,80),shareIdentityDefault,updatedAt:now()};localProfiles()[userId]=profile;
-  if(profile.nickname&&profile.bio)awardLocalGrowth(userId,'profile_completed',userId,10);return structuredClone(profile);
+  return structuredClone(profile);
 }
 export function saveLocalAvatar(userId:string,avatarUrl:string|null,fallbackNickname?:string|null){const current=localProfiles()[userId]??defaultLocalProfile(userId,fallbackNickname);const profile={...current,avatarUrl:avatarUrl||undefined,updatedAt:now()};localProfiles()[userId]=profile;return structuredClone(profile)}
 export function getLocalGrowth(userId:string){const account=localGrowthAccounts()[userId]??{userId,points:0,level:1 as const,nextLevelPoints:100};return{account:structuredClone(account),entries:structuredClone(localGrowthLedger()[userId]??[])}}
@@ -107,7 +170,7 @@ export function getLocalInbox(userId:string,cursor='0',limit=20):InboxPage{const
 export function markLocalInboxRead(userId:string,reviewIds:string[]){const allowed=new Set(store().reviews.map(review=>review.id));const merged=[...new Set([...(localInboxReads()[userId]??[]),...reviewIds.filter(id=>allowed.has(id))])].slice(-1000);localInboxReads()[userId]=merged;return{ok:true,readReviewIds:merged}}
 export function getLocalDeviceFocus(userId:string){return localDeviceFocus()[userId]??null}
 export function setLocalDeviceFocus(userId:string,requestId:string|null){if(requestId&&!store().requests.some(request=>request.id===requestId&&['REVIEWING','SAVING'].includes(request.status)))throw new LocalStoreError('这个心愿当前不能同步到电子花',409);localDeviceFocus()[userId]=requestId;return{focusRequestId:requestId}}
-export function saveLocalShoppingProfile(userId:string,items:ShoppingProfileItem[]){const timestamp=now();const categoryCounts=items.reduce<Record<string,number>>((counts,item)=>{counts[item.category]=(counts[item.category]??0)+1;return counts},{});const profile:ShoppingProfile={userId,source:'REGISTER_SCREENSHOTS',consentedAt:timestamp,items,categoryCounts,updatedAt:timestamp};localShoppingProfiles()[userId]=profile;awardLocalGrowth(userId,'shopping_profile_import',userId,20);return structuredClone(profile)}
+export function saveLocalShoppingProfile(userId:string,items:ShoppingProfileItem[]){const timestamp=now();const categoryCounts=items.reduce<Record<string,number>>((counts,item)=>{counts[item.category]=(counts[item.category]??0)+1;return counts},{});const profile:ShoppingProfile={userId,source:'REGISTER_SCREENSHOTS',consentedAt:timestamp,items,categoryCounts,updatedAt:timestamp};localShoppingProfiles()[userId]=profile;awardLocalGrowth(userId,'consumption_upload',crypto.randomUUID(),10);return structuredClone(profile)}
 
 export function isLocalPreview(request:Request) {
   // When Next.js listens on 0.0.0.0 it may normalize request.url to the
@@ -136,6 +199,10 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     globalThis.__worthBloomLocalGrowthAccounts = {};
     globalThis.__worthBloomLocalGrowthLedger = {};
     globalThis.__worthBloomLocalInboxReads = {};
+    (globalThis as Record<string, unknown>).__worthBloomDeviceFocus = {};
+    (globalThis as Record<string, unknown>).__worthBloomShoppingProfiles = {};
+    (globalThis as Record<string, unknown>).__worthBloomLocalLoginStreaks = {};
+    clearPersistedFile();
     return { ok:true };
   }
   const data = store();
@@ -164,13 +231,15 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
   }
   if (body.action === 'update_request') {
     const requestId=String(body.requestId??'');
-    const request=data.requests.find(item=>item.id===requestId);
-    if(!request)throw new LocalStoreError('没有找到这个心愿',404);
-    if(request.status!=='REVIEWING')throw new LocalStoreError('这个决定已经保存，可以复制为新心愿后继续调整。',409,'REQUEST_READ_ONLY');
+    const original=data.requests.find(item=>item.id===requestId);
+    if(!original)throw new LocalStoreError('没有找到这个心愿',404);
+    if(original.status!=='REVIEWING')throw new LocalStoreError('这个决定已经保存，可以复制为新心愿后继续调整。',409,'REQUEST_READ_ONLY');
     const expected=Number(body.expectedRevision);
-    const currentRev=Number(request.revision??1);
+    const currentRev=Number(original.revision??1);
     if(!Number.isFinite(expected)||expected!==currentRev)throw new LocalStoreError('心愿已在其他页面更新，请刷新后重试。',409,'REVISION_CONFLICT');
     const payload=body.payload as Record<string,unknown>;
+    // 先在副本上应用并校验，全部通过后才写回，避免校验失败留下半提交状态
+    const request={...original};
     if(typeof payload.name==='string')request.name=payload.name.trim().slice(0,80);
     if(typeof payload.price==='number')request.price=payload.price;
     if(typeof payload.reason==='string')request.reason=payload.reason.trim().slice(0,500);
@@ -196,6 +265,7 @@ export function handleLocalDataAction(body:Record<string,unknown>) {
     if(!String(request.concern??'').trim())throw new LocalStoreError('请填写或选择你最担心的问题',400,'concern');
     if(!request.type||!isKnownWishType(request.type))throw new LocalStoreError('请选择类型',400,'type');
     request.revision=currentRev+1; request.updatedAt=now(); request.similar_item=request.concern;
+    Object.assign(original,request);
     return { request:normalizeWish(request as unknown as Record<string,unknown>) };
   }
   if (body.action === 'create_invite') {
@@ -285,7 +355,7 @@ export function claimLocalReview(reviewId: string, claimToken: string, userId: s
   }
   review.claimedBy = userId;
   review.claimedAt = now();
-  awardLocalGrowth(userId,'review_claim',reviewId,10);return { claimed: true, pointsAwarded: 10, dailyLimitReached: false, growthAccount: getLocalGrowth(userId).account };
+  awardLocalGrowth(userId,'review_claim',reviewId,3);return { claimed: true, pointsAwarded: 3, dailyLimitReached: false, growthAccount: getLocalGrowth(userId).account };
 }
 
 export function getLocalReview(tokenValue:string) {
@@ -298,6 +368,7 @@ export function getLocalReview(tokenValue:string) {
   if(linkState!=='ACTIVE')throw new LocalStoreError('这张邀请卡已经完成使命了',410,linkState);
   const normalized=normalizeWish(request! as unknown as Record<string,unknown>);
   const wish:Partial<PurchaseRequest>={ id:normalized.id,name:normalized.name,price:normalized.price,type:normalized.type,reason:normalized.reason,concern:normalized.concern,brand:normalized.brand,skuLabel:normalized.skuLabel,details:normalized.details,sourcePlatform:normalized.sourcePlatform,productUrl:normalized.productUrl,images:normalized.images,revision:normalized.revision };
+  awardLocalGrowth('owner-preview','effective_share',invite.token,2);
   return { request:wish, ownerDisplay:null as null, linkState:'ACTIVE' as const };
 }
 
@@ -308,7 +379,7 @@ export function submitLocalReview(body:{token?:string;reviewerName?:string;revie
   if(!body.token)throw new LocalStoreError('链接不完整',400);
   if(!body.stamp&&!body.choice)throw new LocalStoreError('请完成判断章',400);
   const commentParts=[reasons.join('；'),note?`备注：${note}`:''].filter(Boolean).join('\n');
-  const comment=commentParts||'';
+  const comment=String(body.comment||commentParts||'');
   if(!comment)throw new LocalStoreError('请完成理由',400);
   const invite=data.invites.find(item=>item.token===body.token); const request=invite?data.requests.find(item=>item.id===invite.request_id):null;
   if(!invite||invite.revoked||!request||request.status!=='REVIEWING')throw new LocalStoreError('邀请链接已关闭或心愿已结束',409,'REVIEW_LINK_CLOSED');
@@ -323,5 +394,6 @@ export function submitLocalReview(body:{token?:string;reviewerName?:string;revie
   const claimToken=crypto.randomUUID().replaceAll('-','');
   // local preview only: stash claim token on review for later claim (round 6)
   (review as Review & { claimTokenDigest?:string }).claimTokenDigest=claimToken;
+  awardLocalGrowth('owner-preview','invite_friend',reviewId,8);
   return { reviewId, claimToken, successText:'感谢你的真实视角，已送到朋友手里。' };
 }

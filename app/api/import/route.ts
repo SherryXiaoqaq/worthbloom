@@ -52,6 +52,17 @@ function fail(error: string, status: number, code?: string) {
   return Response.json({ error, code }, { status });
 }
 
+function aiNotConfiguredScreenshot(raw: string, hint: string) {
+  return Response.json({
+    status: 'READY_FOR_CONFIRMATION',
+    urlCandidates: [],
+    selectedUrl: null,
+    snapshot: fallbackSnapshot(raw, hint || '截图中的商品', true),
+    fallback: true,
+    sourceWarning: 'AI 尚未配置：请先在 .env.local 填写 ZHIPU_API_KEY',
+  });
+}
+
 async function identifyLink(url: string) {
   try{return { page:await readProductPage(url), url, sourceWarning:null };}
   catch(error){return{page:null,url,sourceWarning:error instanceof Error?error.message:'商品页面无法直接读取'};}
@@ -80,6 +91,7 @@ async function identifyWithAi(url: string | null, page: { promptText: string } |
       rawText ? `用户补充文本：${rawText}` : '',
       hint ? `提示：${hint}` : '',
       '请提取可用于创建心愿的字段。截止日期只有页面明确给出时才填写。',
+      image ? '价格识别规则：优先提取图片中明确标注的券后价、到手价、现价、售价，尤其是 ¥ 或 ￥ 后面的金额；例如“¥41.72 券后价”应返回 price: 41.72。不要因为价格旁有“券后价”就置空。' : '',
       `严格返回以下 JSON 结构：${JSON.stringify(schemaExample)}`,
     ].filter(Boolean).join('\n\n'),
     image,
@@ -118,9 +130,8 @@ export async function POST(request: Request) {
       if (type === 'SCREENSHOT') {
         // raw may carry a data URL of the screenshot
         const isDataUrl = raw.startsWith('data:image/');
-        if (!isAiConfigured() || !isDataUrl) {
-          return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: [], selectedUrl: null, snapshot: fallbackSnapshot(raw, '截图中的商品', true), fallback: true });
-        }
+        if (!isAiConfigured()) return aiNotConfiguredScreenshot(raw, '截图中的商品');
+        if (!isDataUrl) return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: [], selectedUrl: null, snapshot: fallbackSnapshot(raw, '截图中的商品', true), fallback: true });
         try {
           const image = await fetch(raw).then(r => r.blob());
           if (!IMAGE_TYPES.has(image.type) || image.size > MAX_IMAGE_BYTES) return fail('截图仅支持 JPG、PNG、WebP，且不能超过 5MB', 400, 'IMAGE_INVALID');
@@ -161,7 +172,7 @@ export async function POST(request: Request) {
 
     if (type === 'SCREENSHOT' && image) {
       if (!IMAGE_TYPES.has(image.type) || image.size > MAX_IMAGE_BYTES) return fail('截图仅支持 JPG、PNG、WebP，且不能超过 5MB', 400, 'IMAGE_INVALID');
-      if (!isAiConfigured()) return Response.json({ status: 'READY_FOR_CONFIRMATION', urlCandidates: [], selectedUrl: null, snapshot: fallbackSnapshot(raw, hint || '截图中的商品', true), fallback: true });
+      if (!isAiConfigured()) return aiNotConfiguredScreenshot(raw, hint || '截图中的商品');
       try {
         const buf = new Uint8Array(await image.arrayBuffer());
         const snapshot = await identifyWithAi(null, null, { base64: bytesToBase64(buf), mimeType: image.type }, raw, hint);

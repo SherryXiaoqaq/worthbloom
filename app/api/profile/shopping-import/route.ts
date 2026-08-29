@@ -32,6 +32,6 @@ export async function POST(request:Request){
     }
     if(!extracted.length)return Response.json({error:'没有识别到足够清楚的商品，请换一张更完整的截图'},{status:422});
     const profile=isCloudBaseServerConfigured()?await saveCloudBaseShoppingProfile(user.id,extracted):saveLocalShoppingProfile(user.id,extracted);
-    return Response.json({profile,pointsAwarded:20,originalImagesStored:false});
+    return Response.json({profile,pointsAwarded:10,originalImagesStored:false});
   }catch(error){const status=error instanceof CloudBaseAuthError||error instanceof CloudBaseStoreError||error instanceof LocalStoreError||error instanceof AiServiceError?error.status:500;return Response.json({error:error instanceof Error?error.message:'购物截图整理失败'},{status})}
 }

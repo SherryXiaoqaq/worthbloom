@@ -1,0 +1,39 @@
+<svg width="640" height="520" viewBox="0 0 640 520" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="petal" x1="168" y1="68" x2="420" y2="432" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F5D6C8" stop-opacity=".9"/>
+      <stop offset="1" stop-color="#E69B83" stop-opacity=".44"/>
+    </linearGradient>
+    <linearGradient id="line" x1="100" y1="44" x2="530" y2="470" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D98C73"/>
+      <stop offset="1" stop-color="#B96850"/>
+    </linearGradient>
+  </defs>
+  <g opacity=".72" stroke="url(#line)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M354 504C349 425 357 346 404 278C433 236 474 204 535 176"/>
+    <path d="M388 410C430 385 470 378 514 384"/>
+    <path d="M414 326C457 307 500 307 548 326"/>
+    <path d="M451 243C486 228 518 224 557 232"/>
+    <path d="M371 440C333 409 314 371 306 325"/>
+    <path d="M405 306C383 274 375 241 379 205"/>
+  </g>
+  <g stroke="url(#line)" stroke-width="1.7" stroke-linejoin="round">
+    <g transform="translate(505 137)">
+      <path fill="url(#petal)" d="M0 39C-31 20-37-10-18-27C1-29 13-7 8 20C23-8 48-16 62 0C63 23 39 39 12 42C42 47 56 69 43 85C20 88 4 65 3 47C-4 69-26 83-42 69C-45 45-24 35 0 39Z"/>
+      <circle cx="5" cy="41" r="6" fill="#F5C1AF"/>
+      <path d="M-18-27C-5-3 2 19 5 41M62 0C38 17 20 31 5 41M43 85C26 65 16 53 5 41M-42 69C-20 56-8 48 5 41" opacity=".62"/>
+    </g>
+    <g transform="translate(407 249) scale(.88)">
+      <path fill="url(#petal)" d="M0 39C-31 20-37-10-18-27C1-29 13-7 8 20C23-8 48-16 62 0C63 23 39 39 12 42C42 47 56 69 43 85C20 88 4 65 3 47C-4 69-26 83-42 69C-45 45-24 35 0 39Z"/>
+      <circle cx="5" cy="41" r="6" fill="#F5C1AF"/>
+      <path d="M-18-27C-5-3 2 19 5 41M62 0C38 17 20 31 5 41M43 85C26 65 16 53 5 41M-42 69C-20 56-8 48 5 41" opacity=".62"/>
+    </g>
+    <g transform="translate(526 348) scale(.66)">
+      <path fill="none" d="M0 39C-31 20-37-10-18-27C1-29 13-7 8 20C23-8 48-16 62 0C63 23 39 39 12 42C42 47 56 69 43 85C20 88 4 65 3 47C-4 69-26 83-42 69C-45 45-24 35 0 39Z"/>
+      <circle cx="5" cy="41" r="6"/>
+      <path d="M-18-27C-5-3 2 19 5 41M62 0C38 17 20 31 5 41M43 85C26 65 16 53 5 41M-42 69C-20 56-8 48 5 41" opacity=".62"/>
+    </g>
+    <path fill="url(#petal)" d="M392 390C358 363 324 375 314 403C339 415 366 410 389 397C374 424 382 454 407 461C427 439 419 409 398 393Z" opacity=".58"/>
+    <path fill="url(#petal)" d="M439 292C420 262 425 237 449 226C467 248 463 272 445 293C472 282 497 291 503 315C476 329 452 316 439 292Z" opacity=".5"/>
+  </g>
+</svg>

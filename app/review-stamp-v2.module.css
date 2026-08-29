@@ -20,3 +20,148 @@
 .claimOk{display:block;margin-top:10px;padding:8px 12px;border-radius:10px;background:#fff6a6;font-weight:700}
 .claimHint{display:block;margin-top:10px;color:#aeb3bb}
 .claimHome{display:inline-block;margin-top:12px;color:#2a5560;font-size:13px;font-weight:700}
+.productChoices{display:grid;gap:10px;margin-top:14px}
+.productChoices button{display:grid;grid-template-columns:42px minmax(170px,1fr) auto;align-items:center;gap:13px;min-height:148px;padding:12px;border:1px solid #e5e6eb;border-radius:18px;background:#fff;text-align:left;overflow:hidden}
+.productChoices img,.productEmpty{display:block;width:100%;height:124px;object-fit:cover;border-radius:14px;background:#f4f5f6}
+.productEmpty{display:grid;place-items:center;color:#c1c5ca;font-size:12px;font-weight:800}
+.productChoices button>b{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:50%;background:#fff6a6;font-size:15px}
+.productChoices small{font-size:14px;font-weight:850;white-space:nowrap}.productChoices .productMeta{display:grid;gap:2px;justify-items:start;min-width:0;max-width:100%}.productChoices .productMeta b{display:block;width:auto;height:auto;border-radius:0;background:none;font-size:13px;font-weight:850;white-space:normal;color:#1f2329}.productChoices .productMeta small{font-size:11px;font-weight:700;white-space:normal}
+.productChoices .productSelected{border:2px solid #1f2329;background:#fffdf0;box-shadow:inset 0 0 0 3px #fff6a6}
+.noneChoice{grid-template-columns:42px minmax(0,1fr)!important;min-height:76px!important;padding:12px!important}
+.noneChoice span{font-size:17px;font-weight:850}
+.step label{gap:10px;font-size:16px;font-weight:850}
+.step textarea,.step input{padding:15px 16px;font-size:15px}
+.step textarea::placeholder,.step input::placeholder{color:#8f949c;font-weight:700}
+@media(max-width:390px){.productChoices button{grid-template-columns:38px minmax(135px,1fr) auto;gap:9px;min-height:126px}.productChoices img,.productEmpty{height:102px}.productChoices small{font-size:12px}}
+
+/* WorthBloom · Warm Editorial friend review surface */
+.stage{
+  --review-paper:#f7f0e7;
+  --review-ivory:#fffaf4;
+  --review-ink:#3b2b27;
+  --review-muted:#7e6b64;
+  --review-blush:#e7b7aa;
+  --review-blush-soft:#f8e8e2;
+  --review-terracotta:#b66e59;
+  --review-sage:#7f9185;
+  --review-gold:#b6915d;
+  --review-line:rgba(111,79,67,.14);
+  --review-shadow:0 24px 58px rgba(101,69,57,.10),0 8px 24px rgba(91,108,105,.055),inset 0 1px 0 rgba(255,255,255,.88);
+  color:var(--review-ink);
+  background:
+    radial-gradient(ellipse at 14% 3%,rgba(255,252,241,.94),transparent 34%),
+    radial-gradient(ellipse at 87% 13%,rgba(216,225,221,.5),transparent 34%),
+    linear-gradient(135deg,#eadfd3,#dfe3e0 52%,#e5d7cf);
+  font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",-apple-system,BlinkMacSystemFont,sans-serif;
+}
+.shell,.card{
+  background:
+    linear-gradient(112deg,rgba(255,255,255,.54),transparent 25%),
+    radial-gradient(ellipse at 88% 2%,rgba(226,232,228,.46),transparent 28%),
+    linear-gradient(180deg,#fbf5ee,#f7eee6);
+  border-inline:1px solid rgba(255,255,255,.65);
+  box-shadow:0 28px 78px rgba(71,51,45,.14),inset 0 1px 0 rgba(255,255,255,.9);
+}
+.shell{min-height:calc(100vh - 40px);padding:20px;border-radius:32px}
+.shell>header{border-bottom-color:var(--review-line)}
+.brand{color:var(--review-terracotta);letter-spacing:.16em}
+.shell>header small{color:var(--review-muted)}
+.wish,.card{
+  border:1px solid rgba(255,255,255,.72);
+  border-radius:28px;
+  background:linear-gradient(145deg,rgba(255,253,250,.9),rgba(248,229,221,.65));
+  box-shadow:var(--review-shadow);
+  backdrop-filter:blur(18px) saturate(112%);
+}
+.wish>span{background:var(--review-blush-soft);color:#945c4d}
+.wish h1,.step h2,.card h1{
+  color:var(--review-ink);
+  font-family:"Songti SC","STSong","Noto Serif CJK SC","Source Han Serif SC",SimSun,serif;
+  font-weight:600;
+  letter-spacing:.015em;
+}
+.wish blockquote{border-left-color:var(--review-terracotta);background:rgba(239,230,223,.64);color:#69574f}
+.wish p,.cta{background:linear-gradient(145deg,var(--review-blush-soft),#f9eee9);color:#7f5246}
+.step{border-bottom-color:var(--review-line)}
+.step>i,.productChoices button>b{background:linear-gradient(145deg,#f7e4da,#e6b4a5);color:#8f5647;box-shadow:inset 0 1px 0 rgba(255,255,255,.85)}
+.step>p,.roles button span,.stamps button span,.detailFold summary,.detailGrid{color:var(--review-muted)}
+.roles button,.stamps button,.reasons button,.productChoices button,.step textarea,.step input{
+  border:1px solid rgba(255,255,255,.7);
+  background:rgba(255,251,247,.76);
+  color:var(--review-ink);
+  box-shadow:0 14px 34px rgba(101,69,57,.07),0 3px 12px rgba(91,108,105,.035),inset 0 1px 0 rgba(255,255,255,.86);
+}
+.roles .selected,.reasons .selected{
+  border-color:rgba(127,145,133,.4);
+  background:linear-gradient(145deg,#e4ebe6,#f8f1e9);
+  color:#53695d;
+  box-shadow:0 0 0 2px rgba(127,145,133,.12) inset,var(--review-shadow);
+}
+.stamps .stampSelected,.productChoices .productSelected{
+  border-color:rgba(182,110,89,.54);
+  background:linear-gradient(145deg,#f4d9cd,#fbf1eb);
+  box-shadow:0 0 0 3px rgba(255,255,255,.72) inset,var(--review-shadow);
+}
+.step textarea:focus,.step input:focus{border-color:rgba(182,110,89,.6);box-shadow:0 0 0 3px rgba(231,183,170,.22),inset 0 1px 0 rgba(255,255,255,.9)}
+.submit{
+  background:linear-gradient(145deg,#513c35,#392c29);
+  color:#fffaf3;
+  box-shadow:0 14px 30px rgba(68,47,41,.2),inset 0 1px 0 rgba(255,255,255,.12);
+}
+.wishImage,.productEmpty{background:linear-gradient(145deg,#f3ded4,#e6ebe7)}
+.carouselPrev,.carouselNext{background:rgba(63,45,40,.72);backdrop-filter:blur(8px)}
+.carouselDots{background:rgba(63,45,40,.66);backdrop-filter:blur(8px)}
+.detailFold{border-top-color:var(--review-line)}
+.claimOk{background:var(--review-blush-soft);color:#8f5748}
+.claimHome,.detailGrid a{color:var(--review-terracotta)}
+.error{background:#f9e5e1;color:#9b4f46}
+.seal{border-color:var(--review-terracotta);background:var(--review-blush-soft);color:var(--review-ink);box-shadow:var(--review-shadow)}
+@media(max-width:560px){.stage{padding:0}.shell{min-height:100vh;border-radius:0;border-inline:0}}
+
+/* ---- 对齐参考稿：朋友回信页的奶油纸面与花卉线稿 ---- */
+.stage{
+  background-image:
+    linear-gradient(112deg,rgba(255,253,245,.8),transparent 30%),
+    repeating-linear-gradient(76deg,transparent 0 86px,rgba(111,73,54,.03) 87px 94px,transparent 95px 148px),
+    radial-gradient(ellipse at 86% 12%,rgba(218,225,220,.5),transparent 34%),
+    linear-gradient(135deg,#ece2d7,#e1e5e1 54%,#e8dbd2);
+}
+.wish{
+  position:relative;overflow:hidden;
+  background-image:url('/worthbloom-botanical.svg'),linear-gradient(145deg,rgba(255,253,250,.94),rgba(250,237,229,.84));
+  background-repeat:no-repeat;
+  background-position:112% 18%,center;
+  background-size:43% auto,auto;
+}
+.wish>*{position:relative;z-index:1}
+.wish h1{max-width:72%;color:#603523}
+.wish blockquote{max-width:72%;background:rgba(255,251,247,.76)}
+.roles button,.stamps button,.productChoices button,.step textarea,.step input{border-color:rgba(225,156,124,.3)}
+.step>i,.productChoices button>b{background:linear-gradient(145deg,#f9dfc6,#f4c89f);color:#7d462f}
+.submit{
+  background-color:#df8263;
+  background-image:url('/worthbloom-botanical.svg'),linear-gradient(100deg,#df805f,#e98f70 58%,#d97558);
+  background-repeat:no-repeat;
+  background-position:112% 54%,center;
+  background-size:36% auto,auto;
+  color:#fffaf5;
+}
+.card{position:relative;overflow:hidden}
+.card:after{content:"";position:absolute;right:-48px;bottom:-54px;width:220px;height:190px;background:url('/worthbloom-botanical.svg') center/contain no-repeat;opacity:.38;pointer-events:none}
+@media(min-width:820px){
+  .shell{width:min(100%,900px);padding:30px 38px}
+  .wish{padding:34px 40px}
+  .wish h1{font-size:38px}
+  .step h2{font-size:26px}
+  .productChoices button{grid-template-columns:58px minmax(300px,1fr) auto;min-height:190px;padding:18px}
+  .productChoices img,.productEmpty{height:158px}
+}
+.wishPlaceholder{
+  background-color:#f8eee7;
+  background-image:url('/worthbloom-botanical.svg'),linear-gradient(145deg,#f9e8dd,#eef0eb);
+  background-repeat:no-repeat;
+  background-position:center,center;
+  background-size:70% auto,auto;
+  color:transparent;
+  font-size:0;
+}

@@ -37,6 +37,8 @@ export async function GET(request: Request) {
     if (row.revoked) linkState = 'REVOKED';
     else if (row.status !== 'REVIEWING') linkState = 'REQUEST_DECIDED';
     if (linkState !== 'ACTIVE') return fail('这张邀请卡已经完成使命了', 410, linkState);
+    const imageRows = await db.prepare(`SELECT id,url,sort_order,is_cover FROM wish_images WHERE request_id = ? ORDER BY sort_order ASC`).bind(String(row.id)).all();
+    row.images = (imageRows.results ?? []).map((image, index) => ({ id: String(image.id ?? index), url: String(image.url ?? ''), sortOrder: Number(image.sort_order ?? index), isCover: Boolean(image.is_cover) }));
     const wish = normalizeWish(row);
     const requestSubset = {
       id: wish.id, name: wish.name, price: wish.price, type: wish.type, reason: wish.reason,

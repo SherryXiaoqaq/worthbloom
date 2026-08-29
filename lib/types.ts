@@ -21,7 +21,10 @@ export type WishType =
   | 'EXPERIENCE'
   | 'OTHER';
 
-export type AgentSessionStatus = 'IN_PROGRESS' | 'COMPLETED' | 'DISMISSED';
+export type AgentSessionStatus = 'IN_PROGRESS' | 'PAUSED' | 'COMPLETED' | 'DISMISSED';
+export type AgentProfileId = 'QUICK_DECISION'|'RATIONAL_ANALYST'|'REVIEW_SYNTHESIZER'|'NAVAL_LENS';
+export type AgentSessionMode = 'SINGLE'|'ROUNDTABLE';
+export type AgentStage = 'EXPLORING'|'CLARIFYING'|'READY_TO_SUMMARIZE';
 export type EvidenceSource = 'WISH_FACT' | 'USER_ANSWER' | 'HUMAN_REVIEW' | 'AI_INFERENCE';
 export type ReviewLinkState = 'ACTIVE' | 'USED' | 'REVOKED' | 'REQUEST_DECIDED' | 'EXPIRED';
 export type ClaimStatus = 'PENDING' | 'CLAIMED' | 'EXPIRED';
@@ -164,9 +167,29 @@ export interface AgentMessage {
   id:string;
   role:'ASSISTANT'|'USER';
   content:string;
+  agentProfileId?:AgentProfileId;
+  payload?:AgentTurnPayload;
   questionId?:string;
   skipped?:boolean;
   createdAt:string;
+}
+export interface AgentSuggestion {
+  id:string;
+  label:string;
+  value:string;
+  intent:'ANSWER'|'FOLLOW_UP'|'SKIP'|'GENERATE_REPORT';
+}
+export interface AgentTurnPayload {
+  text:string;
+  agentProfileId:AgentProfileId;
+  generatedBy:'MODEL'|'RULE_FALLBACK';
+  degraded?:boolean;
+  clientMessageId?:string;
+  question?:{id:string;dimension:string;text:string;allowSkip:true};
+  suggestions:AgentSuggestion[];
+  sourceIds:string[];
+  canGenerateReport:boolean;
+  stage:AgentStage;
 }
 export interface EvidenceItem {
   id:string;
@@ -175,6 +198,8 @@ export interface EvidenceItem {
   sourceIds:string[];
 }
 export interface AgentReport {
+  generatedBy:'MODEL'|'RULE_FALLBACK';
+  workingConclusion:{direction:'MOVE_FORWARD'|'PAUSE'|'COLLECT_MORE_INFO';summary:string};
   confirmedFacts:EvidenceItem[];
   motives:EvidenceItem[];
   signalsForPurchase:EvidenceItem[];
@@ -190,6 +215,11 @@ export interface AgentSession {
   requestId:string;
   requestRevision:number;
   status:AgentSessionStatus;
+  mode:AgentSessionMode;
+  agentProfileId:AgentProfileId;
+  promptVersion:string;
+  summary?:string;
+  metadata?:Record<string,unknown>;
   messages:AgentMessage[];
   report?:AgentReport;
   questionCount:number;
@@ -216,7 +246,7 @@ export interface UserProfile {
 export interface GrowthAccount {
   userId:string;
   points:number;
-  level:1|2|3|4;
+  level:1|2|3|4|5;
   nextLevelPoints?:number;
   updatedAt?:string;
 }
