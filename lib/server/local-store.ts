@@ -18,7 +18,7 @@ declare global {
 }
 
 // ——— 本地演示模式持久化：状态防抖写入磁盘，重启 dev server 后自动恢复，不再丢数据 ———
-const LOCAL_STATE_FILE = process.env.WORTHBLOOM_LOCAL_STATE_FILE || path.join(process.cwd(), '.worthbloom-local-state.json');
+const LOCAL_STATE_FILE = path.join(process.cwd(), '.local-data', 'worthbloom-state.json');
 let persistedLoaded = false;
 function ensurePersistedLoaded() {
   if (persistedLoaded) return;

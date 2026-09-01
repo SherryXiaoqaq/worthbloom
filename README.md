@@ -106,7 +106,7 @@ http://localhost:3000
 
 点击“进入我的好好花”即可。这个模式不需要注册，也不需要 CloudBase。仓库自带“去冰岛看极光”、课程、陶艺课、耳机和存钱目标等示例数据，方便直接理解完整流程。
 
-本地修改会保存在项目根目录的 `.worthbloom-local-state.json` 中，重启开发服务器后仍会恢复；该文件已被 `.gitignore` 排除，不会提交到仓库。
+本地修改会保存在 `.local-data/worthbloom-state.json` 中，重启开发服务器后仍会恢复；整个 `.local-data/` 目录已被 `.gitignore` 排除，不会提交到仓库。
 
 ### 3. 推荐试玩顺序
 

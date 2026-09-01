@@ -1758,7 +1758,7 @@ window.__pptPresenter?.initMode();
 <script>lucide.createIcons();</script>
 
 <!-- ============ Motion One 动效引擎（本地优先,CDN 兜底） ============
-     加载策略:先 ./assets/motion.min.js(本地,离线可用),失败 fallback 到 jsDelivr CDN
+     加载策略:先 ./motion.min.js(本地,离线可用),失败 fallback 到 jsDelivr CDN
      加载完成后挂 window.__playSlide / window.__pipeAdvance,
      导航脚本会在翻页中段调用 __playSlide(idx),键盘/滚轮/触屏会在翻页前调用 __pipeAdvance()
      双双失败时会兜底把所有 [data-anim] 设为可见,不让动效破坏阅读
@@ -1766,7 +1766,7 @@ window.__pptPresenter?.initMode();
 <script type="module">
 let motion;
 try {
-  motion = await import('./assets/motion.min.js');
+  motion = await import('./motion.min.js');
 } catch(e1) {
   try {
     motion = await import('https://cdn.jsdelivr.net/npm/motion@11.11.17/+esm');

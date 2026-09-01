@@ -9,7 +9,6 @@ export type WishStatus = 'DRAFT'|'CLARIFYING'|'SEEKING_PERSPECTIVE'|'READY_TO_DE
 export type WishSourceType = 'MANUAL'|'LINK'|'SCREENSHOT';
 export type ReviewRole = 'KNOWS_YOU'|'USED_IT'|'BOTH';
 export type ReviewStamp = 'FITS'|'CONDITIONAL'|'WAIT'|'NOT_FIT'|'NEED_INFO';
-export type PerspectiveSource = 'FACT'|'HUMAN'|'AI';
 
 // Spec §1
 export type WishType =
@@ -58,8 +57,6 @@ export interface ClarificationQuestion {
   customMaxLength?:number;
 }
 export interface ClarificationAnswer { question_id:string; value:string|null; skipped:boolean; }
-export interface PerspectiveItem { id:string; title:string; content:string; source_type:PerspectiveSource; source_ids:string[]; }
-export interface PerspectiveSummary { consensus:PerspectiveItem[]; disagreements:PerspectiveItem[]; risks:PerspectiveItem[]; unknowns:PerspectiveItem[]; fallback:boolean; }
 export interface StructuredReviewInput { reviewerRole:ReviewRole; stamp:ReviewStamp; reasons:string[]; note?:string; }
 
 // Spec §4.4

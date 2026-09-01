@@ -1,7 +1,25 @@
 'use client';
 
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useSyncExternalStore } from 'react';
 import { clearStoredSession, DEMO_SESSION_KEY } from '@/lib/cloudbase/client';
+
+const DEMO_SESSION_CHANGED_EVENT = 'wb-demo-session-changed';
+
+function readDemoSession() {
+  try { return localStorage.getItem(DEMO_SESSION_KEY) === '1'; } catch { return false; }
+}
+
+function subscribeToDemoSession(onStoreChange: () => void) {
+  const onExpired = () => { clearStoredSession(); onStoreChange(); };
+  window.addEventListener('storage', onStoreChange);
+  window.addEventListener('wb-auth-expired', onExpired);
+  window.addEventListener(DEMO_SESSION_CHANGED_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener('storage', onStoreChange);
+    window.removeEventListener('wb-auth-expired', onExpired);
+    window.removeEventListener(DEMO_SESSION_CHANGED_EVENT, onStoreChange);
+  };
+}
 
 /**
  * 本地演示模式登录门。
@@ -12,30 +30,13 @@ import { clearStoredSession, DEMO_SESSION_KEY } from '@/lib/cloudbase/client';
  * 重新进入即可回到之前的记录。
  */
 export default function DemoAuthGate({ children }: { children: ReactNode }) {
-  const [checking, setChecking] = useState(true);
-  const [signedIn, setSignedIn] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    let value: string | null = null;
-    try { value = localStorage.getItem(DEMO_SESSION_KEY); } catch { /* 隐私模式等场景忽略 */ }
-    if (active) setSignedIn(value === '1');
-    if (active) setChecking(false);
-    return () => { active = false; };
-  }, []);
-
-  useEffect(() => {
-    const onExpired = () => { clearStoredSession(); setSignedIn(false); };
-    window.addEventListener('wb-auth-expired', onExpired);
-    return () => window.removeEventListener('wb-auth-expired', onExpired);
-  }, []);
+  const signedIn = useSyncExternalStore(subscribeToDemoSession, readDemoSession, () => false);
 
   function enter() {
     try { localStorage.setItem(DEMO_SESSION_KEY, '1'); } catch { /* 忽略 */ }
-    setSignedIn(true);
+    window.dispatchEvent(new Event(DEMO_SESSION_CHANGED_EVENT));
   }
 
-  if (checking) return null;
   if (signedIn) return children;
 
   return <main className="auth-stage"><section className="auth-card">

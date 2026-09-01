@@ -73,10 +73,6 @@ function decisionCopyForRequest(request:PurchaseRequest,choice:ReviewChoice){
   if(choice==='BUY_NOW')return '已选择购买';
   return '已选择先不买';
 }
-function decisionReasonForRequest(request:PurchaseRequest){
-  const note=decisionNoteOf(request).split(/\r?\n/).map(line=>line.trim()).filter(line=>line&&!/^(?:已选择购买[A-Z]|已选择先不买|决定[:：]\s*(?:买\s*[A-Z]|先不买|都不买))$/.test(line)).join('\n');
-  return note||'当时没有补充决定理由。';
-}
 function statusCopy(request:PurchaseRequest){if(request.status==='REVIEWING')return request.review_count?'回信已到':'等待回信';if(request.status==='SAVING')return '先存钱';if(request.status==='PURCHASED')return '现在购买';return '再等等'}
 function categoryGlyph(category:string){if(category.includes('课程')||category.includes('训练'))return '课';if(category.includes('数码')||category.includes('商品'))return '物';return '愿'}
 function imageFor(request:PurchaseRequest){return request.image_url||request.images?.find(image=>image.isCover)?.url||request.images?.[0]?.url||''}

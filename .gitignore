@@ -36,6 +36,7 @@ yarn-error.log*
 .env*
 !.env.example
 .worthbloom-local-state.json
+/.local-data/
 
 # deployment and generated files
 .vercel
@@ -44,3 +45,12 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# local source material and one-off presentation workspaces
+/.local-materials/
+/.tmp-*/
+/WorthBloom_HTML_PPT/
+/*.ppt
+/*.pptx
+/*.pptm
+/*.docx
