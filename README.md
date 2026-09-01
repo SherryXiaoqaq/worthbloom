@@ -1,6 +1,6 @@
 # WorthBloom · 好好花
 
-> 把想买说清楚，把价值用起来。
+> 花开有时，花钱有值。
 
 WorthBloom 是一个围绕“消费前想清楚、消费后真正用起来”设计的移动端 Web 原型。它把心愿记录、AI 梳理、朋友回信、自主决定、存钱计划、购买后使用追踪和一朵可联动的桌面电子花串成一条完整路径。
 
@@ -9,7 +9,7 @@ WorthBloom 是一个围绕“消费前想清楚、消费后真正用起来”设
 项目目前处于 **P1 可运行原型**阶段，并获得 **Shenicest 千人黑客松软件赛道第二名**。你可以不注册、不配置数据库，直接在本地体验主要流程；AI、多人云端账户和实体电子花按需启用。欢迎体验并提出问题，可联系 `2603885096@qq.com`。
 
 - 在线体验：[立即打开 WorthBloom](https://worthbloom-web-302528-11-1473737765.sh.run.tcloudbase.com)
-- 项目介绍 PPT（启用 GitHub Pages 后）：[sherryxiaoqaq.github.io/worthbloom](https://sherryxiaoqaq.github.io/worthbloom/)
+- 项目介绍 PPT（HTML)：[sherryxiaoqaq.github.io/worthbloom](https://sherryxiaoqaq.github.io/worthbloom/)
 - 项目介绍 PPT 源文件：[docs/index.html](docs/index.html)
 - 当前技术栈：Next.js 16、React 19、TypeScript、腾讯云 CloudBase、智谱 GLM、Pi Runtime、ESP32-S3
 
@@ -233,23 +233,22 @@ pnpm eval:agent
 pnpm eval:agent:api
 ```
 
-## 隐私与产品边界
-
-- AI 负责整理和提供视角，不会替用户点击最终决定。
-- 朋友只通过邀请链接访问对应心愿，看不到主人的其他记录或其他朋友答案。
-- CloudBase 模式按主人身份隔离数据，服务端密钥不会进入浏览器代码。
-- 购物画像只在用户主动同意后生成结构化结果；CloudBase 不保存原始购物截图。
-- 电子花只接收进度数字，不需要获得朋友昵称、回信或账户隐私。
-- 这是黑客松原型，不应作为财务建议、资金托管或生产级账户系统直接使用。
 
 ## 当前限制
 
 - 商品网站可能限制自动读取，截图导入通常更稳定。
 - AI 服务可能受到模型额度、限流或第三方网关状态影响。
-- 完整多人模式需要自行配置 CloudBase；本地演示不提供真实的多账户隔离。
 - BLE 电子花目前主要面向 Android Chrome，机械结构仍处于原型阶段。
 - 项目仍需要补充更完整的自动化回归、真实多账号测试、无障碍检查和线上监控。
 
-如果你只是第一次路过，先运行本地演示、打开示例心愿，再从“我的果实”看一眼购买后的使用追踪——这三步最能说明 WorthBloom 与普通记账或购物清单的区别。
+## 项目成员及分工
+
+| 成员 | 负责方向 | 路演交付 |
+| --- | --- | --- |
+| 咔咔 | 产品架构与功能推广 | 用户流程、功能优先级、演示脚本、现场功能讲解 |
+| 菠梨心 | 软件开发 | 前端页面、交互流程、数据联调与功能落地 |
+| Scarlett | 软件开发 | Next.js / TypeScript、CloudBase API、AI 与系统集成 |
+| 天启腾 | 视觉与商业策划 | 视觉规范、项目包装、商业表达与路演材料 |
+| Emo | 硬件开发 | ESP32-S3 固件、电子花状态显示、按键与设备联调 |
 
 感谢每一位愿意体验 WorthBloom 的朋友。我们期待听到你的真实感受、问题和建议；欢迎通过 `2603885096@qq.com` 联系我们。
